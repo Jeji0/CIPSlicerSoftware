@@ -30,11 +30,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(BASE_DIR, "config.json"), "r") as f:
     configFile = json.load(f)
 
-# ⚠ PLACEHOLDER - confirm real values from hardware team (machine-specific steps/mm)
+#  PLACEHOLDER - confirm real values from hardware team (machine-specific steps/mm)
 steps_per_mm_x = configFile.get("steps_per_mm_x", 80)
 steps_per_mm_y = configFile.get("steps_per_mm_y", 80)
 
-# ⚠ PLACEHOLDER - confirm real cure time (seconds) from hardware team
+#  PLACEHOLDER - confirm real cure time (seconds) from hardware team
 cure_time_seconds = configFile.get("cure_time_seconds", 30)
 
 def coord_to_steps(x_mm: float, y_mm: float) -> tuple[int, int]:
@@ -111,7 +111,7 @@ with GCodeBuilder(output=output_file) as g:
             g.move(z=-2)
             g.rapid(z=5)
 
-        # ⚠ PLACEHOLDER - cure dwell after each copper layer (confirm cure_time_seconds with hardware team)
+        #  PLACEHOLDER - cure dwell after each copper layer (confirm cure_time_seconds with hardware team)
         g.sleep(cure_time_seconds)
 
     g.tool_off()
