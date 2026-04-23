@@ -7,7 +7,7 @@
     ],
     "layerHeight": 0.2,
     "printSpeed": 60,
-    "gerberFile": "TestFiles\\test-gbr.zip",
+    "gerberFile": "TestFiles/test-gbr.zip",
     "steps_per_mm_x": 80,
     "steps_per_mm_y": 80
 }
