@@ -30,12 +30,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(BASE_DIR, "config.json"), "r") as f:
     configFile = json.load(f)
 
-# steps per mm tells the machine how many motor steps equal 1mm of movement
-# PLACEHOLDER - confirm real values from machine firmware 
+# ⚠ PLACEHOLDER - confirm real values from hardware team (machine-specific steps/mm)
 steps_per_mm_x = configFile.get("steps_per_mm_x", 80)
 steps_per_mm_y = configFile.get("steps_per_mm_y", 80)
 
-# PLACEHOLDER - confirm real cure time (seconds) from hardware team
+# ⚠ PLACEHOLDER - confirm real cure time (seconds) from hardware team
 cure_time_seconds = configFile.get("cure_time_seconds", 30)
 
 def coord_to_steps(x_mm: float, y_mm: float) -> tuple[int, int]:
@@ -45,13 +44,6 @@ def coord_to_steps(x_mm: float, y_mm: float) -> tuple[int, int]:
 # load the full Gerber project from the job file (contains all layers)
 gerber_job = GerberJobFile.from_file(os.path.join(BASE_DIR, "../TestFiles/test-job.gbrjob"))
 project = gerber_job.to_project()
-
-# derive the output .gcode filename from the zip path in config
-# e.g. TestFiles/test-gbr.zip -> TestFiles/test-gbr.gcode
-gerber_zip_path = configFile.get("gerberFile", "TestFiles/test-gbr.zip")
-gerber_dir      = os.path.join(BASE_DIR, "..", os.path.dirname(gerber_zip_path))
-gerber_name     = os.path.splitext(os.path.basename(gerber_zip_path))[0]
-output_file     = os.path.join(gerber_dir, gerber_name + ".gcode")
 
 # use files_attributes from the job file — gives us path + official layer function
 # file_function values: Copper, SolderPaste, SolderMask, Legend, Profile
