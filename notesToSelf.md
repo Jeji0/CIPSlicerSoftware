@@ -86,3 +86,63 @@ For curves:
 - `pygerber==3.0.0a4` — Gerber file parsing
 - `gscrib==1.2.0` — G-code generation
 - `pillow` — image rendering (for visual verification)
+
+## Important G-code Commands Reference
+
+### Motion Commands
+| Command | Description | Example |
+|---------|-------------|---------|
+| `G0` | Rapid move — fast positioning, no cutting | `G0 X10 Y5` |
+| `G1` | Linear move — controlled speed, used for ink deposition | `G1 Z-2 F600` |
+| `G2` | Circular move clockwise | `G2 X10 Y0 I5 J0` |
+| `G3` | Circular move counterclockwise | `G3 X10 Y0 I5 J0` |
+
+### Setup Commands
+| Command | Description | Example |
+|---------|-------------|---------|
+| `G21` | Set units to millimeters | `G21` |
+| `G20` | Set units to inches | `G20` |
+| `G90` | Absolute positioning — all moves from origin | `G90` |
+| `G91` | Relative positioning — all moves from current position | `G91` |
+| `G92` | Set current position as origin | `G92 X0 Y0 Z0` |
+| `G17` | Work in XY plane (default) | `G17` |
+| `G28` | Return to home position | `G28 X0 Y0` |
+
+### Timing & Tool Commands
+| Command | Description | Example |
+|---------|-------------|---------|
+| `G4` | Dwell — pause for a set time | `G04 P30` (30 seconds) |
+| `M3` | Spindle/tool on clockwise | `M03 S1000` (1000 RPM) |
+| `M5` | Spindle/tool off | `M05` |
+| `M8` | Flood coolant on | `M08` |
+| `M9` | Flood coolant off | `M09` |
+
+### Program Commands
+| Command | Description | Example |
+|---------|-------------|---------|
+| `M0` | Program stop (pause) | `M00` |
+| `M2` | End of program, no reset | `M02` |
+| `M30` | End of program, reset to start | `M30` |
+
+### Parameters
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `X` `Y` `Z` | Axis coordinates in mm | `G0 X10 Y5 Z0` |
+| `F` | Feed rate in mm/min | `G1 Z-2 F600` |
+| `S` | Spindle speed in RPM | `M03 S1000` |
+| `P` | Dwell time in seconds | `G04 P30` |
+| `I` `J` | Arc center offset from current point (X and Y) | `G2 X10 Y0 I5 J0` |
+
+### What Our Slicer Currently Uses
+| Command | Where |
+|---------|-------|
+| `G21` | Set mm at start |
+| `G90` | Absolute mode at start |
+| `G92 X0 Y0 Z0` | Set origin at start |
+| `G0` | Rapid move to pad position |
+| `G1 Z-2` | Press down to deposit ink |
+| `G0 Z5` | Lift to safe height |
+| `G04 P30` | Cure dwell after each copper layer |
+| `M03 S1000` | Tool on at start |
+| `M05` | Tool off at end |
+| `M02` | End of program |
