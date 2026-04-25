@@ -1,13 +1,16 @@
 {
     "units": "mm",
-    "maxBedSize": [
-        220,
-        220,
-        250
-    ],
+    "maxBedSize": [220, 220, 250],
     "layerHeight": 0.2,
+    "layerMode": "single",
     "printSpeed": 60,
     "gerberFile": "TestFiles/test-gbr.zip",
+    "gerberJobFile": "TestFiles/test-job.gbrjob",
     "steps_per_mm_x": 80,
-    "steps_per_mm_y": 80
+    "steps_per_mm_y": 80,
+    "steps_per_mm_z": 400,
+    "cure_dry_temp": 90,
+    "cure_dry_seconds": 300,
+    "cure_temp": 170,
+    "cure_seconds": 900
 }
