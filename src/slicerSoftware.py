@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 import json
 import re
+import math
 
 from pygerber.gerber.api import GerberFile, GerberJobFile
 from gscrib import GCodeBuilder
@@ -50,6 +51,9 @@ def validate_config(config: dict) -> None:
     if config.get("steps_per_mm_y", 0) <= 0:
         errors.append("steps_per_mm_y must be a positive number")
 
+    if config.get("steps_per_mm_z", 0) <= 0:
+        errors.append("steps_per_mm_z must be a positive number")
+
     if config.get("cure_dry_seconds", 0) < 0:
         errors.append("cure_dry_seconds cannot be negative")
     if config.get("cure_seconds", 0) < 0:
@@ -74,6 +78,7 @@ validate_config(configFile)
 #  PLACEHOLDER - confirm real values (machine-specific steps/mm)
 steps_per_mm_x = configFile.get("steps_per_mm_x", 80)
 steps_per_mm_y = configFile.get("steps_per_mm_y", 80)
+steps_per_mm_z = configFile.get("steps_per_mm_z", 400)
 
 # Conductor 3 two-stage cure process
 # Stage 1: dry at 90°C for 5 minutes
@@ -110,17 +115,99 @@ def extract_coords(gbr_path: str) -> list[tuple[float, float]]:
     min_y = min(c[1] for c in coords)
     return [(x - min_x, y - min_y) for x, y in coords]
 
-def camera_sweep(g, safe_z: float) -> None:
+def extract_traces(gbr_path: str) -> list[tuple[float, float]]:
+    """Extract and normalize X/Y trace coordinates from a .gbr file (D01 draw commands)."""
+    gerber_file = GerberFile.from_file(gbr_path)
+    coords = []
+    for match in re.finditer(r'X(-?\d+)Y(-?\d+)D01', gerber_file.source_code):
+        x = int(match.group(1)) / 1_000_000
+        y = int(match.group(2)) / 1_000_000
+        coords.append((x, y))
+    if not coords:
+        return coords
+    min_x = min(c[0] for c in coords)
+    min_y = min(c[1] for c in coords)
+    return [(x - min_x, y - min_y) for x, y in coords]
+
+def calculate_fill_passes(trace_width_mm: float, nozzle_size_mm: float) -> int:
+    """Calculate number of parallel passes needed to fill a trace width."""
+    return math.ceil(trace_width_mm / nozzle_size_mm)
+
+def generate_fill_offsets(x: float, y: float, next_x: float, next_y: float, nozzle_size: float, passes: int) -> list[tuple[float, float]]:
     """
-    PLACEHOLDER - camera sweep after each ink + cure sequence
-    Moves the camera across the board to check for shorts / coverage
-    Exact pattern and coordinates to be confirmed with camera team
-    Currently just moves to origin and back as a stub
+    Generate parallel offset positions for multi-pass trace filling.
+    Offsets are perpendicular to the trace direction.
     """
-    #PLACEHOLDER - replace with real sweep pattern from camera team
+    dx = next_x - x
+    dy = next_y - y
+    length = math.sqrt(dx**2 + dy**2)
+    if length == 0:
+        return [(x, y)]
+
+    # perpendicular unit vector
+    perp_x = -dy / length
+    perp_y = dx / length
+
+    points = []
+    for i in range(passes):
+        offset = (i - (passes - 1) / 2) * nozzle_size
+        ox = max(0, x + perp_x * offset)
+        oy = max(0, y + perp_y * offset)
+        points.append((ox, oy))
+    return points
+
+def camera_sweep(g, safe_z: float, board_size_x: float = 0, board_size_y: float = 0, layer_index: int = 0) -> bool:
+    """
+    Camera sweep after each ink + cure sequence.
+    Moves to sweep position and triggers CV system to check for shorts/coverage.
+    Returns True if pass, False if fail.
+    
+    PLACEHOLDER - sweep pattern and CV communication to be confirmed with camera team
+    """
     g.rapid(z=safe_z)
     g.rapid(x=0, y=0)
-    print("camera sweep (placeholder)")
+
+    # PLACEHOLDER - trigger CV system here
+    # CV system should receive: board_size_x, board_size_y, layer_index
+    # CV system should return: pass/fail
+    # Example future implementation:
+    # result = cv_system.check(board_size_x, board_size_y, layer_index)
+    # if not result:
+    #     print(f"  CV check failed on layer {layer_index} — stopping print")
+    #     return False
+
+    print(f"camera sweep layer {layer_index} (placeholder) — board {board_size_x}x{board_size_y}mm")
+    return True
+
+def deposit_insulator(g, coords: list, work_z: float, safe_z: float, nozzle_size: float) -> None:
+    """
+    Deposit insulator layer (ACI SI3104) over the entire board surface.
+    Uses a raster fill pattern to cover all copper traces.
+    Insulator is on a separate head — head offset applied from config.
+    Cure: 135C for 5-15 minutes after deposition.
+    """
+    if not coords:
+        print("  no coords for insulator layer, skipping")
+        return
+
+    # apply head offset for insulator head
+    offset_x = configFile.get("insulator_head_offset_x", 0)
+    offset_y = configFile.get("insulator_head_offset_y", 0)
+
+    insulator_cure_seconds = configFile.get("insulator_cure_seconds", 600)
+
+    print(f"  depositing insulator over {len(coords)} points")
+    for x, y in coords:
+        ox = max(0, x + offset_x)
+        oy = max(0, y + offset_y)
+        g.rapid(point=(ox, oy))
+        g.move(z=work_z)
+        g.rapid(z=safe_z)
+
+    # cure insulator at 135C for 5-15 minutes
+    # temperature control depends on hardware heater setup
+    print(f"  insulator cure: 135C for {insulator_cure_seconds}s")
+    g.sleep(insulator_cure_seconds)
 
 # derive output .gcode path from config
 gerber_zip_path = configFile.get("gerberFile", "TestFiles/test-gbr.zip")
@@ -132,6 +219,22 @@ output_file     = os.path.join(gerber_dir, gerber_name + ".gcode")
 gerber_job_path = os.path.join(BASE_DIR, "..", configFile.get("gerberJobFile", "TestFiles/test-job.gbrjob"))
 gerber_job      = GerberJobFile.from_file(gerber_job_path)
 project         = gerber_job.to_project()
+
+# pull board info from job file
+board_size_x    = gerber_job.general_specs.size.x
+board_size_y    = gerber_job.general_specs.size.y
+board_layers    = gerber_job.general_specs.layer_number
+copper_thickness = next(
+    (s.thickness for s in gerber_job.material_stackup if s.type == "Copper"),
+    0.035
+)
+
+print(f"Board: {board_size_x}x{board_size_y}mm, {board_layers} layers, copper thickness: {copper_thickness}mm")
+
+# auto set layer mode based on board layers if not set in config
+if "layerMode" not in configFile:
+    layer_mode = "multi" if board_layers > 1 else "single"
+    print(f"Auto layer mode: {layer_mode}")
 
 # auto unzip gerber file if not already extracted
 import zipfile
@@ -160,7 +263,7 @@ with GCodeBuilder(output=output_file) as g:
     g.sleep(1)
 
     # single mode = top copper only, multi mode = all copper layers
-    layer_mode  = configFile.get("layerMode", "single")
+    layer_mode  = configFile.get("layerMode", "multi")
     layer_index = 0
     print(f"Layer mode: {layer_mode}")
 
@@ -187,10 +290,10 @@ with GCodeBuilder(output=output_file) as g:
         # check if any coords exceed bed size and skip them
         max_x = configFile["maxBedSize"][0]
         max_y = configFile["maxBedSize"][1]
-        out_of_bounds = [(x, y) for x, y in coords if x > max_x or y > max_y]
+        out_of_bounds = [(x, y) for x, y in coords if x > board_size_x or y > board_size_y]
         if out_of_bounds:
-            print(f"WARNING: {len(out_of_bounds)} coords exceed bed size ({max_x}x{max_y}mm) — skipping them")
-            coords = [(x, y) for x, y in coords if x <= max_x and y <= max_y]
+            print(f"WARNING: {len(out_of_bounds)} coords exceed board size ({board_size_x}x{board_size_y}mm) — skipping them")
+            coords = [(x, y) for x, y in coords if x <= board_size_x and y <= board_size_y]
 
         # calculate Z depth for this layer based on layer height from config
         layer_height = configFile.get("layerHeight", 0.2)
@@ -203,6 +306,25 @@ with GCodeBuilder(output=output_file) as g:
             g.move(z=work_z)
             g.rapid(z=safe_z)
 
+# process traces with fill passes based on nozzle size
+        traces      = extract_traces(gbr_path)
+        nozzle_size = configFile.get("nozzleSize", 0.225)
+        trace_width = configFile.get("traceWidth", 0.25)
+        fill_passes = calculate_fill_passes(trace_width, nozzle_size)
+
+        if traces:
+            print(f"  processing {len(traces)} trace points — {fill_passes} fill pass(es) per trace")
+            for i in range(len(traces) - 1):
+                x,  y  = traces[i]
+                nx, ny = traces[i + 1]
+                offsets = generate_fill_offsets(x, y, nx, ny, nozzle_size, fill_passes)
+                for ox, oy in offsets:
+                    g.rapid(point=(ox, oy))
+                    g.move(z=work_z)
+                    g.rapid(z=safe_z)
+        else:
+            print(f"  no traces found in {fa.path}")
+
         # Conductor 3 two-stage cure — dry then sinter
         # temperature control depends on hardware heater setup
         print(f"cure stage 1: dry 90°C for 5min")
@@ -211,7 +333,15 @@ with GCodeBuilder(output=output_file) as g:
         g.sleep(cure_seconds)
 
         # camera sweep after cure
-        camera_sweep(g, safe_z)
+        sweep_passed = camera_sweep(g, safe_z, board_size_x, board_size_y, layer_index)
+        if not sweep_passed:
+            print(f"  camera sweep failed on layer {layer_index} — stopping print")
+            break
+
+        # deposit insulator between copper layers in multi mode
+        if layer_mode == "multi" and layer_index < board_layers - 1:
+            print(f"  depositing insulator between layers")
+            deposit_insulator(g, coords, work_z, safe_z, nozzle_size)
 
         layer_index += 1
 
