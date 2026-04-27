@@ -12,5 +12,11 @@
     "cure_dry_temp": 90,
     "cure_dry_seconds": 300,
     "cure_temp": 170,
-    "cure_seconds": 900
+    "cure_seconds": 900,
+    "nozzleSize": 0.225,
+    "traceWidth": 0.25,
+    "insulator_cure_temp": 135,
+    "insulator_cure_seconds": 600,
+    "insulator_head_offset_x": 0,
+    "insulator_head_offset_y": 0
 }
