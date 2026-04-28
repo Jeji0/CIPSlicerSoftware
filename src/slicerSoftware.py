@@ -206,10 +206,9 @@ def deposit_insulator(g, coords: list, work_z: float, safe_z: float, nozzle_size
 
     # cure insulator at 135C for 5-15 minutes
     print(f"  insulator cure: 135C for {insulator_cure_seconds}s")
-    g.set_bed_temperature(configFile.get("insulator_cure_temp", 135))
+    g.write(f"M190 S{configFile.get('insulator_cure_temp', 135)}")
     g.sleep(insulator_cure_seconds)
-    g.set_bed_temperature(0)
-
+    g.write("M140 S0")
 # derive output .gcode path from config
 gerber_zip_path = configFile.get("gerberFile", "TestFiles/test-gbr.zip")
 gerber_dir      = os.path.join(BASE_DIR, "..", os.path.dirname(gerber_zip_path))
@@ -327,18 +326,18 @@ with GCodeBuilder(output=output_file) as g:
             print(f"  no traces found in {fa.path}")
 
         # Conductor 3 two-stage cure — dry then sinter
-        # Stage 1: dry at 90C for 5 minutes
+        # Stage 1: dry at 90C for 5 minutes — M190 blocks until temp reached
         print(f"cure stage 1: dry 90C for 5min")
-        g.set_bed_temperature(configFile.get("cure_dry_temp", 90))
+        g.write(f"M190 S{configFile.get('cure_dry_temp', 90)}")
         g.sleep(cure_dry_seconds)
 
         # Stage 2: sinter at 170C for 15 minutes
         print(f"cure stage 2: sinter 170C for 15min")
-        g.set_bed_temperature(configFile.get("cure_temp", 170))
+        g.write(f"M190 S{configFile.get('cure_temp', 170)}")
         g.sleep(cure_seconds)
 
         # cool down before camera sweep
-        g.set_bed_temperature(0)
+        g.write("M140 S0")
 
         # camera sweep after cure
         sweep_passed = camera_sweep(g, safe_z, board_size_x, board_size_y, layer_index)
