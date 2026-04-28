@@ -29,8 +29,21 @@ printProp = {
     "units": defUnits,
     "maxBedSize": defMaxBed,
     "layerHeight": defLayHei,
-    "printSpeed": defPriSpe
-
+    "printSpeed": defPriSpe,
+    "layerMode": "single",
+    "steps_per_mm_x": 80,
+    "steps_per_mm_y": 80,
+    "steps_per_mm_z": 400,
+    "nozzleSize": 0.225,
+    "traceWidth": 0.25,
+    "cure_dry_temp": 90,
+    "cure_dry_seconds": 300,
+    "cure_temp": 170,
+    "cure_seconds": 900,
+    "insulator_cure_temp": 135,
+    "insulator_cure_seconds": 600,
+    "insulator_head_offset_x": 0,
+    "insulator_head_offset_y": 0
 }
 
     #Nozzle Properties
