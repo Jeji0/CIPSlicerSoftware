@@ -1,5 +1,7 @@
 import tkinter as tk
 from tkinter import filedialog
+import subprocess
+import os
 
 from zipfile import ZipFile
 import json
@@ -17,22 +19,18 @@ GUI LAYOUT PLAN:
 [Gen G-code]    []      []      [] 
 '''
 
+GERBfile = "" # gerber file path global variable
 
-GERBfile = "" #gerber file path global variable
-
-
-
-#GUI functions
-def saveInputMain(lH, x,y,z, file):
+# GUI functions
+def saveInputMain(lH, x, y, z, file):
     layHeight = 0
-    maxBed = [0,0,0]
-
+    maxBed = [0, 0, 0]
 
     try:
         layHeight = float(lH.get()) if lH.get() != "" else 0
-        maxBed = [float(x.get()) if (x.get() != "X" or x.get() == "") else 0,
-                  float(y.get()) if (y.get() != "Y" or y.get() == "") else 0,
-                  float(z.get()) if (z.get() != "Z" or z.get() == "") else 0]
+        maxBed = [float(x.get()) if (x.get() != "X" and x.get() != "") else 0,
+          float(y.get()) if (y.get() != "Y" and y.get() != "") else 0,
+          float(z.get()) if (z.get() != "Z" and z.get() != "") else 0]
     except ValueError:
         print("Invalid input. Please enter numeric values")
 
@@ -43,16 +41,11 @@ def saveInputMain(lH, x,y,z, file):
 
     if file != "":
         cF.updConf({"gerberFile": file})
-  
 
-#Import gerber files through the GUI
-def importFile(): #take in zip of gerber files
+
+# Import gerber files through the GUI
+def importFile():
     global GERBfile
-    #take in zip
-    #extract it
-    #parse zip file
-        #extract only copper layers
-        #take in file parameters
     GERBfile = filedialog.askopenfilename(
         title="Select a ZIP file to extract",
         filetypes=[("ZIP files", "*.zip")]
@@ -62,52 +55,54 @@ def importFile(): #take in zip of gerber files
         return
     print(f"Selected ZIP file: {GERBfile}")
 
-def GUI(): #GUI for the slicer software
+
+# Run slicerSoftware.py and generate G-code
+def generateGcode():
+    script_path = os.path.join(os.path.dirname(__file__), "slicerSoftware.py")
+    result = subprocess.run(["python3", script_path], capture_output=True, text=True)
+    print(result.stdout)
+    if result.returncode != 0:
+        print(f"Error: {result.stderr}")
+    else:
+        print("G-code generated successfully.")
+
+
+def GUI():
     MainScreen = tk.Tk()
     MainScreen.title("Slicer Software")
-    #MainScreen.geometry("400x200")
     MainScreen.grid
 
-#input fields
-    #open ink configuration GUI
+    # open ink configuration GUI
     inkConfigButton = tk.Button(MainScreen, text="Configure Ink Properties", command=iGUI)
     inkConfigButton.grid(row=0, column=0, sticky="w")
 
-    #Layer Height Input
-    tk.Label(MainScreen, text="Layer Height (mm)").grid(row=1, column=0,sticky="w")
-    layerHeightInput = tk.Entry(MainScreen,width=5)
+    # Layer Height Input
+    tk.Label(MainScreen, text="Layer Height (mm)").grid(row=1, column=0, sticky="w")
+    layerHeightInput = tk.Entry(MainScreen, width=5)
     layerHeightInput.grid(row=1, column=1)
-    print("Layer Height: ", layerHeightInput.get())
 
-
-    #Bed Size Input
-    tk.Label(MainScreen, text="Max Bed Size (X, Y, Z in mm)").grid(row=2, column=0,sticky="w")
-    xIn = tk.Entry(MainScreen,width=5)
+    # Bed Size Input
+    tk.Label(MainScreen, text="Max Bed Size (X, Y, Z in mm)").grid(row=2, column=0, sticky="w")
+    xIn = tk.Entry(MainScreen, width=5)
     xIn.grid(row=2, column=1, sticky="w")
     xIn.insert(0, "X")
-    yIn = tk.Entry(MainScreen,width=5)
-    yIn.grid(row=2, column=2)   
+    yIn = tk.Entry(MainScreen, width=5)
+    yIn.grid(row=2, column=2)
     yIn.insert(0, "Y")
-    zIn = tk.Entry(MainScreen,width=5)
+    zIn = tk.Entry(MainScreen, width=5)
     zIn.grid(row=2, column=3, sticky="w")
     zIn.insert(0, "Z")
 
     uploadButton = tk.Button(MainScreen, text="Upload Gerber File", command=importFile)
-    uploadButton.grid(row=3, column=0,sticky="w")
+    uploadButton.grid(row=3, column=0, sticky="w")
 
-    saveButton = tk.Button(MainScreen, text="Save", 
-                           command = lambda: saveInputMain(layerHeightInput, xIn, yIn, zIn, GERBfile))
-    saveButton.grid(row=3, column=4,sticky="w")
+    saveButton = tk.Button(MainScreen, text="Save",
+                           command=lambda: saveInputMain(layerHeightInput, xIn, yIn, zIn, GERBfile))
+    saveButton.grid(row=3, column=4, sticky="w")
 
-    #tk.Label(MainScreen,text="").grid(row=3, column=1) #empty label for spacing
+    generateButton = tk.Button(MainScreen, text="Generate G-code", command=generateGcode)
+    generateButton.grid(row=4, column=0, sticky="e")
 
-    
-    '''Link to GCODE gen function later'''
-    generateButton = tk.Button(MainScreen,text="Generate G-code",
-                               command= None) 
-    generateButton.grid(row=4, column=0,sticky="e")
-
-    #start screen
     MainScreen.mainloop()
 
 #GUI()
