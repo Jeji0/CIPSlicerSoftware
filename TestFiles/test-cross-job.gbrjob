@@ -1,0 +1,36 @@
+{
+  "Header": {
+    "GenerationSoftware": {
+      "Vendor": "Manual",
+      "Application": "CIPSlicer Test",
+      "Version": "1.0"
+    }
+  },
+  "GeneralSpecs": {
+    "ProjectId": {
+      "Name": "test-cross",
+      "Revision": "1"
+    },
+    "Size": {
+      "X": 20.0,
+      "Y": 20.0
+    },
+    "LayerNumber": 1,
+    "BoardThickness": 1.6,
+    "Finish": "None"
+  },
+  "DesignRules": [],
+  "FilesAttributes": [
+    {
+      "Path": "test-cross-F_Cu.gbr",
+      "FileFunction": "Copper,L1,Top",
+      "FilePolarity": "Positive"
+    }
+  ],
+  "MaterialStackup": [
+    {
+      "Type": "Copper",
+      "Thickness": 0.035
+    }
+  ]
+}

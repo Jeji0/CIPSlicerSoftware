@@ -1,0 +1,27 @@
+%FSLAX56Y56*%
+%MOMM*%
+%LPD*%
+
+%ADD10C,0.250000*%
+%ADD11C,1.000000*%
+
+G04 Two crossing traces — horizontal and diagonal*
+
+D11*
+
+X5000000Y5000000D03*
+X15000000Y5000000D03*
+X5000000Y15000000D03*
+X15000000Y15000000D03*
+
+D10*
+
+G04 Trace 1 — horizontal left to right*
+X5000000Y10000000D02*
+X15000000Y10000000D01*
+
+G04 Trace 2 — diagonal top-left to bottom-right (crosses trace 1)*
+X5000000Y15000000D02*
+X15000000Y5000000D01*
+
+M02*
