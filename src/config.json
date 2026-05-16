@@ -1,13 +1,62 @@
 {
     "units": "mm",
     "maxBedSize": [
-        220,
-        220,
-        250
+        220.0,
+        220.0,
+        250.0
     ],
     "layerHeight": 0.2,
-    "printSpeed": 60,
-    "gerberFile": "TestFiles\\test-gbr.zip",
+    "conductiveLayerHeight": 0.2,
+    "insulatorLayerHeight": 0.2,
+    "boardThickness": 0,
+    "printHeightOffset": 0.5,
+    "layerMode": "single",
+    "printSpeed": 60.0,
+    "gerberFile": "TestFiles/test5-gbr.zip",
+    "gerberJobFile": "TestFiles/test5-job.gbrjob",
     "steps_per_mm_x": 80,
-    "steps_per_mm_y": 80
+    "steps_per_mm_y": 80,
+    "steps_per_mm_z": 400,
+    "activeHeads": ["conductor3", "si3104"],
+    "heads": [
+        {
+            "id": "conductor3",
+            "name": "Voltera Conductor 3",
+            "type": "conductive",
+            "toolNumber": 0,
+            "nozzleSize": 0.225,
+            "traceWidth": 0.225,
+            "cureDryTemp": 90,
+            "cureDrySeconds": 300,
+            "cureTemp": 170,
+            "cureSeconds": 900
+        },
+        {
+            "id": "si3104",
+            "name": "ACI SI3104 Insulator",
+            "type": "insulator",
+            "toolNumber": 1,
+            "nozzleSize": 0.225,
+            "traceWidth": 0.225,
+            "cureTemp": 135,
+            "cureSeconds": 600,
+            "offsetX": 0,
+            "offsetY": 0
+        },
+        {
+            "id": "paste",
+            "name": "Solder Paste",
+            "type": "paste",
+            "toolNumber": 2,
+            "nozzleSize": 0.3,
+            "cureTemp": 0,
+            "cureSeconds": 0
+        }
+    ],
+    "nozzleSize": 0.225,
+    "traceWidth": 0.25,
+    "cure_dry_temp": 90.0,
+    "cure_dry_seconds": 300.0,
+    "cure_temp": 170.0,
+    "cure_seconds": 900.0
 }

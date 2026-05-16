@@ -1,9 +1,13 @@
 import configFunctions as cF
 from GUI import GUI
+import os
 
 def main():
-    cF.defConfig()
-    print("Default configuration set. Starting GUI...")
+    if not os.path.exists("config.json"):
+        cF.defConfig()
+        print("Default configuration created.")
+    else:
+        print("Existing configuration loaded.")
     GUI()
 
 if __name__ == "__main__":

@@ -11,8 +11,8 @@ INK WINDOW LAYOUT PLAN:
 [Ink Name]      [input]         []
 [INK TYPE]      [Conductive]    [Insulator]
 [NOZZLE DIAM]   [input]         []
-[Cureing Temp]  [input]         []
-[Cureing Time]  [input]         []
+[Curing Temp]  [input]         []
+[Curing Time]  [input]         []
 [AddInk]        []              [Close]
 
 '''
@@ -30,9 +30,9 @@ def addHead(name, head, nD, cTe, cTi):
         nD = float(nD.get()) if nD.get() != "" else 0
         #print(f"Nozzle diameter: {nD}")
         cTe = float(cTe.get()) if cTe.get() != "" else 0
-        #print(f"Cureing temperature: {cTe}")
+        #print(f"Curing temperature: {cTe}")
         cTi = float(cTi.get()) if cTi.get() != "" else 0
-        #print(f"Cureing time: {cTi}")
+        #print(f"Curing time: {cTi}")
     except ValueError:
         print("Invalid input. Please enter numeric values")
 
@@ -44,7 +44,7 @@ def addHead(name, head, nD, cTe, cTi):
                 "headType": headType,
                 "nozzleDiameter": nD,
                 "curingTemperature": cTe,
-                "curingTime": cTi
+                "curingTime": cTi * 60 # convert minutes to seconds
             }
         }
 
@@ -91,14 +91,14 @@ def inkGUI():
     nozDiam = tk.Entry(inkConfig)
     nozDiam.grid(row=2, column=1, sticky="w")
 
-    #Cureing Temp
-    cureTempLabel = tk.Label(inkConfig, text="Cureing Temperature (°C):")
+    #Curing Temp
+    cureTempLabel = tk.Label(inkConfig, text="Curing Temperature (°C):")
     cureTempLabel.grid(row=3, column=0, sticky="w")
 
     cureTemp = tk.Entry(inkConfig)
     cureTemp.grid(row=3, column=1, sticky="w")
-    #Cureing Time
-    cureTimeLabel = tk.Label(inkConfig, text="Cureing Time (Min):")
+    #Curing Time
+    cureTimeLabel = tk.Label(inkConfig, text="Curing Time (Min):")
     cureTimeLabel.grid(row=4, column=0, sticky="w")
 
     cureTime = tk.Entry(inkConfig)
