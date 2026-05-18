@@ -203,6 +203,8 @@ def extract_coords(gbr_path: str, offset_x: float = None, offset_y: float = None
         aperture_sizes[apt_id]  = size
         aperture_shapes[apt_id] = shape
 
+    print(aperture_sizes)
+
     # extract pad positions with their aperture size and shape
     raw = []
     current_aperture = None
@@ -272,6 +274,9 @@ def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None
             aperture_sizes[apt_id] = float(params[0]) * scale
         else:
             aperture_sizes[apt_id] = float(params[0]) * scale if params else 0.225
+    
+
+    print(aperture_sizes)
 
     raw_segments = []
     current_x = 0.0
@@ -448,7 +453,12 @@ def generate_fill_offsets(x: float, y: float, next_x: float, next_y: float, nozz
     return points
 
 def generate_pad_spiral(cx: float, cy: float, radius: float, nozzle_size: float) -> list[tuple[float, float, bool]]:
-    """Fill a circular pad with concentric circles from center outward."""
+    """Fill a circular pad with concentric circles from center outward.
+
+    Deprecated for G-code output: this returns many points that become segmented G1
+    moves. It is kept here as a fallback/reference, but circular pads are now
+    emitted with G2/G3 arcs by deposit_circular_pad_arcs().
+    """
     points = []
     step       = nozzle_size * 0.8
     angle_step = 0.15
@@ -464,6 +474,99 @@ def generate_pad_spiral(cx: float, cy: float, radius: float, nozzle_size: float)
         r += step
 
     return points
+
+
+def gcode_float(value: float, decimals: int = 6) -> str:
+    """Format a G-code number without trailing zero clutter."""
+    text = f"{value:.{decimals}f}".rstrip("0").rstrip(".")
+    if text == "-0":
+        return "0"
+    return text if text else "0"
+
+
+def generate_pad_arc_radii(radius: float, nozzle_size: float) -> list[float]:
+    """Return the same center-out concentric pad radii formerly used by generate_pad_spiral()."""
+    if radius <= 0:
+        return []
+    if nozzle_size <= 0:
+        raise ValueError("nozzle_size must be greater than 0")
+
+    step = nozzle_size * 0.8
+    radii = []
+
+    r = step
+    while r <= radius:
+        radii.append(r)
+        r += step
+
+    # If the pad is bigger than the nozzle but smaller than the first normal ring,
+    # still emit one arc at the pad radius instead of silently producing no pad path.
+    if not radii:
+        radii.append(radius)
+
+    return radii
+
+
+def get_pad_arc_clockwise(configFile: dict) -> bool:
+    """Select G2/G3 direction for circular pad rings.
+
+    Default is G3/CCW because the old point-based circle generator walked around
+    each circle with increasing angle, which is counterclockwise.
+    Optional config values:
+      "padArcDirection": "G2", "CW", "CLOCKWISE", "G3", "CCW", or "COUNTERCLOCKWISE"
+      "padArcClockwise": true/false  # backwards/simple boolean option
+    """
+    direction = str(configFile.get("padArcDirection", "")).strip().upper()
+    if direction in {"G2", "CW", "CLOCKWISE"}:
+        return True
+    if direction in {"G3", "CCW", "COUNTERCLOCKWISE"}:
+        return False
+
+    value = configFile.get("padArcClockwise", False)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on", "g2", "cw", "clockwise"}
+    return bool(value)
+
+
+def deposit_circular_pad_arcs(
+    g,
+    cx: float,
+    cy: float,
+    radius: float,
+    nozzle_size: float,
+    work_z: float,
+    safe_z: float,
+    clockwise: bool = False,
+) -> None:
+    """Deposit a circular pad as concentric full-circle G2/G3 arcs.
+
+    A full circle starts and ends at the same point. I/J are relative center
+    offsets from the arc start point, matching common G-code arc syntax:
+
+        start = (cx + radius, cy)
+        center offset = I=-radius, J=0
+
+    The result is one G2/G3 command per ring instead of many short G1 chords.
+    """
+    arc_code = "G2" if clockwise else "G3"
+
+    for r in generate_pad_arc_radii(radius, nozzle_size):
+        start_x = cx + r
+        start_y = cy
+
+        g.rapid(z=safe_z)
+        g.rapid(point=(start_x, start_y))
+        g.rapid(z=work_z)
+
+        g.write(
+            f"{arc_code} "
+            f"X{gcode_float(start_x)} "
+            f"Y{gcode_float(start_y)} "
+            f"I{gcode_float(-r)} "
+            f"J0"
+        )
+
+    g.rapid(z=safe_z)
 
 def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
     """Fill rectangular pad with a single continuous rectangular spiral from outside inward."""
@@ -729,7 +832,7 @@ def run():
             global_min_y = min(all_raw_y) - 2.0
 
             coords, _, _ = extract_coords(gbr_path, offset_x=global_min_x, offset_y=global_min_y)
-            for i, (x, y, s, sh) in enumerate(coords[:10]):
+            for i, (x, y, s, sh) in enumerate(coords[:]):
                 print(f"  pad[{i}]: ({x:.3f},{y:.3f}) size={s:.4f} shape={sh}")
             _nozzle_size = get_head_for_layer(configFile, layer_type).get("nozzleSize", 0.225)
             traces, _, _ = extract_traces(gbr_path, offset_x=global_min_x, offset_y=global_min_y, min_trace_width=_nozzle_size)
@@ -746,7 +849,7 @@ def run():
                 coords = [(x, y, s, sh) for x, y, s, sh in coords if x <= board_size_x and y <= board_size_y]
 
             # filter out oversized pads (copper pours, fill zones)
-            coords = [(x, y, s, sh) for x, y, s, sh in coords if s <= 10.0]
+            # coords = [(x, y, s, sh) for x, y, s, sh in coords if s <= 10.0]
 
             # mirror bottom layer coordinates on X axis
             if is_bottom:
@@ -769,7 +872,10 @@ def run():
             nozzle_size      = active_head.get("nozzleSize", 0.225)
             trace_width      = active_head.get("traceWidth", 0.225)
             fill_passes      = calculate_fill_passes(trace_width, nozzle_size)
+            pad_arc_clockwise = get_pad_arc_clockwise(configFile)
+            pad_arc_code      = "G2" if pad_arc_clockwise else "G3"
             print(f"  processing {fname} ({layer_type}) — {len(coords)} pads — Z depth: {work_z:.2f}mm")
+            print(f"  circular pads will use {pad_arc_code} full-circle arcs")
 
             # deposit ink on each pad using raster fill based on aperture size
             for px, py, pad_size, pad_shape in coords:
@@ -777,17 +883,19 @@ def run():
                     g.rapid(z=safe_z)
                     g.rapid(point=(px, py))
                     g.rapid(z=work_z)
+                    g.rapid(z=safe_z)
                 else:
                     if pad_shape == 'C':
-                        circles = generate_pad_spiral(px, py, pad_size / 2, nozzle_size)
-                        for cx, cy, new_circle in circles:
-                            if new_circle:
-                                g.rapid(z=safe_z)
-                                g.rapid(point=(cx, cy))
-                                g.rapid(z=work_z)
-                            else:
-                                g.move(point=(cx, cy))
-                        g.rapid(z=safe_z)
+                        deposit_circular_pad_arcs(
+                            g,
+                            cx=px,
+                            cy=py,
+                            radius=pad_size / 2,
+                            nozzle_size=nozzle_size,
+                            work_z=work_z,
+                            safe_z=safe_z,
+                            clockwise=pad_arc_clockwise,
+                        )
                     else:
                         lines = generate_pad_raster(px, py, pad_size, nozzle_size, pad_shape)
                         if lines:
@@ -796,7 +904,7 @@ def run():
                             g.rapid(z=work_z)
                             for sx, sy, ex, ey in lines:
                                 g.move(point=(sx, sy))
-                                g.move(point=(ex, ey))
+                                # g.move(point=(ex, ey))
                             g.rapid(z=safe_z)
 
 
