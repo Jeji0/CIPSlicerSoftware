@@ -740,7 +740,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
                 print(f"  pad[{i}]: ({x:.3f},{y:.3f}) size={s:.4f} shape={sh}")
             _nozzle_size = get_head_for_layer(configFile, layer_type).get("nozzleSize", 0.225)
             traces, _, _ = extract_traces(gbr_path, offset_x=global_min_x, offset_y=global_min_y, min_trace_width=_nozzle_size)
-            traces = [(s, e, tw) for s, e, tw in traces if tw <= 1.0]
+            traces = [(s, e, tw) for s, e, tw in traces if tw <= 2.0]
         
 
             if not coords:
