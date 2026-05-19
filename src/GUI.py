@@ -235,7 +235,7 @@ def show_pcb_preview(root, coords, traces):
         spine.set_edgecolor("white")
 
     # draw traces
-    for (sx, sy), (ex, ey) in traces:
+    for (sx, sy), (ex, ey), *_ in traces:
         ax.plot([sx, ex], [sy, ey], color="#ff6600", linewidth=1, alpha=0.8)
 
     # draw pads
@@ -279,7 +279,13 @@ def generateGcode(fields, output, btn, root):
 
     def run_slicer():
         try:
-            slicerSoftware.run()
+            slicerSoftware.run(
+                enable_tool_change=fields["toggle_tool_change"].get(),
+                enable_heating=fields["toggle_heating"].get(),
+                enable_camera_sweep=fields["toggle_camera_sweep"].get(),
+                enable_crossover=fields["toggle_crossover"].get(),
+                use_arc_moves=fields["toggle_arc_moves"].get(),
+            )
 
             gerber_path = fields["gerberFile"].get()
             gcode_name  = os.path.splitext(os.path.basename(gerber_path))[0] + ".gcode"
@@ -413,9 +419,36 @@ def GUI():
     tk.Button(file_frame, text="Browse", font=("Helvetica", 11),
               command=lambda: browse_job_file(fields)).grid(row=2, column=1)
 
+    # ── DEBUG TOGGLES ──
+    toggle_frame = tk.LabelFrame(root, text="Debug / Testing",
+                                 font=("Helvetica", 11, "bold"), padx=12, pady=8)
+    toggle_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 6))
+
+    fields["toggle_tool_change"]  = tk.BooleanVar(value=True)
+    fields["toggle_heating"]      = tk.BooleanVar(value=True)
+    fields["toggle_camera_sweep"] = tk.BooleanVar(value=True)
+    fields["toggle_crossover"]    = tk.BooleanVar(value=True)
+    fields["toggle_arc_moves"] = tk.BooleanVar(value=False)
+
+    tk.Checkbutton(toggle_frame, text="Use G2 arcs for circles",
+                   variable=fields["toggle_arc_moves"],
+                   font=("Helvetica", 11)).grid(row=1, column=0, sticky="w", padx=(0, 16))
+    tk.Checkbutton(toggle_frame, text="Tool change",
+                   variable=fields["toggle_tool_change"],
+                   font=("Helvetica", 11)).grid(row=0, column=0, sticky="w", padx=(0, 16))
+    tk.Checkbutton(toggle_frame, text="Heating / cure",
+                   variable=fields["toggle_heating"],
+                   font=("Helvetica", 11)).grid(row=0, column=1, sticky="w", padx=(0, 16))
+    tk.Checkbutton(toggle_frame, text="Camera sweep",
+                   variable=fields["toggle_camera_sweep"],
+                   font=("Helvetica", 11)).grid(row=0, column=2, sticky="w", padx=(0, 16))
+    tk.Checkbutton(toggle_frame, text="Crossover bridge",
+                   variable=fields["toggle_crossover"],
+                   font=("Helvetica", 11)).grid(row=0, column=3, sticky="w")
+
     # ── BUTTONS ──
     btn_frame = tk.Frame(root)
-    btn_frame.grid(row=3, column=0, columnspan=2, sticky="e", padx=12, pady=(0, 6))
+    btn_frame.grid(row=4, column=0, columnspan=2, sticky="e", padx=12, pady=(0, 6))
 
     tk.Button(btn_frame, text="Preview PCB", font=("Helvetica", 11),
               command=lambda: previewPCB(fields, root)).pack(side=tk.LEFT, padx=(0, 8))
@@ -430,7 +463,7 @@ def GUI():
     # ── OUTPUT WINDOW ──
     out_frame = tk.LabelFrame(root, text="Output",
                               font=("Helvetica", 11, "bold"), padx=12, pady=8)
-    out_frame.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
+    out_frame.grid(row=5, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
 
     output = scrolledtext.ScrolledText(out_frame, height=8, font=("Courier", 10),
                                        state=tk.NORMAL, wrap=tk.WORD)

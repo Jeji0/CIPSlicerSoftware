@@ -447,20 +447,27 @@ def generate_fill_offsets(x: float, y: float, next_x: float, next_y: float, nozz
         points.append((ox, oy))
     return points
 
-def generate_pad_spiral(cx: float, cy: float, radius: float, nozzle_size: float) -> list[tuple[float, float, bool]]:
-    """Fill a circular pad with concentric circles from center outward."""
+def generate_pad_spiral(cx: float, cy: float, radius: float, nozzle_size: float, use_arc_moves: bool = False) -> list[tuple[float, float, bool, float, float]]:
+    """Fill a circular pad with concentric circles from center outward.
+    use_arc_moves=True: returns arc metadata for G2 output
+    use_arc_moves=False: returns linearized points for G1 output"""
     points = []
     step       = nozzle_size * 0.8
     angle_step = 0.15
 
     r = step
     while r <= radius:
-        steps = int(2 * math.pi / angle_step) + 1
-        for i in range(steps + 1):
-            a = i * angle_step
-            x = cx + r * math.cos(a)
-            y = cy + r * math.sin(a)
-            points.append((x, y, i == 0))
+        if use_arc_moves:
+            # full circle: start = (cx+r, cy), I=-r, J=0
+            points.append((cx + r, cy, True, -r, 0))
+            points.append((cx + r, cy, False, -r, 0))
+        else:
+            steps = int(2 * math.pi / angle_step) + 1
+            for i in range(steps + 1):
+                a = i * angle_step
+                x = cx + r * math.cos(a)
+                y = cy + r * math.sin(a)
+                points.append((x, y, i == 0, 0, 0))
         r += step
 
     return points
@@ -563,7 +570,7 @@ def deposit_insulator(g, coords: list, work_z: float, safe_z: float, nozzle_size
     g.write("M140 S0")  # turn off heater after cure
 
 
-def run():
+def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, enable_crossover=True, use_arc_moves=False):
     """Main entry point — loads config, parses Gerber files, generates G-code."""
 
     # load machine and print settings from config.json
@@ -762,7 +769,8 @@ def run():
             safe_z = work_z + 5
             active_head      = get_head_for_layer(configFile, layer_type)
             tool_number      = get_tool_number(active_head)
-            g.write(f"T{tool_number}")
+            if enable_tool_change:
+                g.write(f"T{tool_number}")
             print(f"  tool change: T{tool_number} ({active_head.get('id', 'unknown')})")
             cure_dry_seconds = active_head.get("cureDrySeconds", 300)
             cure_seconds     = active_head.get("cureSeconds", 900)
@@ -779,12 +787,15 @@ def run():
                     g.rapid(z=work_z)
                 else:
                     if pad_shape == 'C':
-                        circles = generate_pad_spiral(px, py, pad_size / 2, nozzle_size)
-                        for cx, cy, new_circle in circles:
+                        circles = generate_pad_spiral(px, py, pad_size / 2, nozzle_size, use_arc_moves=use_arc_moves)
+                        for cx, cy, new_circle, arc_i, arc_j in circles:
                             if new_circle:
                                 g.rapid(z=safe_z)
                                 g.rapid(point=(cx, cy))
                                 g.rapid(z=work_z)
+                            elif use_arc_moves:
+                                # G2 full circle: end = start, I/J = center offset
+                                g.write(f"G2 X{cx:.4f} Y{cy:.4f} I{arc_i:.4f} J{arc_j:.4f}")
                             else:
                                 g.move(point=(cx, cy))
                         g.rapid(z=safe_z)
@@ -826,16 +837,18 @@ def run():
 
                 # layer 1 cure
                 if layer_type == "copper":
-                    print(f"  cure stage 1: dry 90C for 5min")
-                    g.write(f"M190 S{int(active_head.get('cureDryTemp', 90))}")
-                    g.sleep(cure_dry_seconds)
-                    print(f"  cure stage 2: sinter 170C for 15min")
-                    g.write(f"M190 S{int(active_head.get('cureTemp', 170))}")
-                    g.sleep(cure_seconds)
-                    g.write("M140 S0")
-                    camera_sweep(g, safe_z, board_size_x, board_size_y, layer_index)
+                    if enable_heating:
+                        print(f"  cure stage 1: dry 90C for 5min")
+                        g.write(f"M190 S{int(active_head.get('cureDryTemp', 90))}")
+                        g.sleep(cure_dry_seconds)
+                        print(f"  cure stage 2: sinter 170C for 15min")
+                        g.write(f"M190 S{int(active_head.get('cureTemp', 170))}")
+                        g.sleep(cure_seconds)
+                        g.write("M140 S0")
+                    if enable_camera_sweep:
+                        camera_sweep(g, safe_z, board_size_x, board_size_y, layer_index)
 
-                if crossings:
+                if crossings and enable_crossover:
                     insulator_head = get_head(configFile, "insulator")
                     ins_tool       = get_tool_number(insulator_head)
                     ins_size       = nozzle_size * 6
@@ -851,7 +864,8 @@ def run():
                         over_segs.add(j)
                    
                     # layer 3: insulator over full length of both crossing traces
-                    g.write(f"T{ins_tool}")
+                    if enable_tool_change:
+                        g.write(f"T{ins_tool}")
                     print(f"  depositing insulator over crossing trace segments")
                     for idx in over_segs:
                         (x, y), (nx, ny), _ = traces[idx]
@@ -862,13 +876,16 @@ def run():
                         g.rapid(z=ins_safe_z)
 
                     # layer 3 cure
-                    g.write(f"M190 S{int(insulator_head.get('cureTemp', 135))}")
-                    g.sleep(insulator_head.get('cureSeconds', 600))
-                    g.write("M140 S0")
-                    camera_sweep(g, over_safe_z, board_size_x, board_size_y, layer_index)
+                    if enable_heating:
+                        g.write(f"M190 S{int(insulator_head.get('cureTemp', 135))}")
+                        g.sleep(insulator_head.get('cureSeconds', 600))
+                        g.write("M140 S0")
+                    if enable_camera_sweep:
+                        camera_sweep(g, over_safe_z, board_size_x, board_size_y, layer_index)
 
                     # layer 5: conductive over-traces
-                    g.write(f"T{tool_number}")
+                    if enable_tool_change:
+                        g.write(f"T{tool_number}")
                     print(f"  redrawing over-traces at Z{over_work_z:.2f}")
                     for idx in over_segs:
                         (x, y), (nx, ny), seg_width = traces[idx]
@@ -885,17 +902,20 @@ def run():
 
                     # layer 5 cure
                     if layer_type == "copper":
-                        print(f"  cure over-traces stage 1: dry 90C for 5min")
-                        g.write(f"M190 S{int(active_head.get('cureDryTemp', 90))}")
-                        g.sleep(cure_dry_seconds)
-                        print(f"  cure over-traces stage 2: sinter 170C for 15min")
-                        g.write(f"M190 S{int(active_head.get('cureTemp', 170))}")
-                        g.sleep(cure_seconds)
-                        g.write("M140 S0")
-                        camera_sweep(g, over_safe_z, board_size_x, board_size_y, layer_index)
+                        if enable_heating:
+                            print(f"  cure over-traces stage 1: dry 90C for 5min")
+                            g.write(f"M190 S{int(active_head.get('cureDryTemp', 90))}")
+                            g.sleep(cure_dry_seconds)
+                            print(f"  cure over-traces stage 2: sinter 170C for 15min")
+                            g.write(f"M190 S{int(active_head.get('cureTemp', 170))}")
+                            g.sleep(cure_seconds)
+                            g.write("M140 S0")
+                        if enable_camera_sweep:
+                            camera_sweep(g, over_safe_z, board_size_x, board_size_y, layer_index)
 
                     # layer 7: insulator cap over full length of over-traces
-                    g.write(f"T{ins_tool}")
+                    if enable_tool_change:
+                        g.write(f"T{ins_tool}")
                     print(f"  depositing insulator cap over over-trace segments")
                     for idx in over_segs:
                         (x, y), (nx, ny), _ = traces[idx]
@@ -906,10 +926,12 @@ def run():
                         g.rapid(z=cap_safe_z)
 
                     # layer 7 cure
-                    g.write(f"M190 S{int(insulator_head.get('cureTemp', 135))}")
-                    g.sleep(insulator_head.get('cureSeconds', 600))
-                    g.write("M140 S0")
-                    camera_sweep(g, over_safe_z, board_size_x, board_size_y, layer_index)
+                    if enable_heating:
+                        g.write(f"M190 S{int(insulator_head.get('cureTemp', 135))}")
+                        g.sleep(insulator_head.get('cureSeconds', 600))
+                        g.write("M140 S0")
+                    if enable_camera_sweep:
+                        camera_sweep(g, over_safe_z, board_size_x, board_size_y, layer_index)
 
             else:
                 print(f"  no traces found in {fname}")

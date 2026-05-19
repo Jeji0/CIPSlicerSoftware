@@ -17,7 +17,9 @@
     "steps_per_mm_x": 80,
     "steps_per_mm_y": 80,
     "steps_per_mm_z": 400,
-    "activeHeads": ["conductor3", "si3104"],
+    "activeHeads": [
+        "conductor3"
+    ],
     "heads": [
         {
             "id": "conductor3",

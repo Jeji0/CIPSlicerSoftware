@@ -592,7 +592,7 @@ G04 P900 ; Sleep for a while, seconds
 M140 S0
 G0 Z5.5
 G0 X0 Y0
-T1
+T0
 G0 Z5.7
 G0 X1 Y10
 G0 Z0.7
@@ -632,7 +632,7 @@ G04 P900 ; Sleep for a while, seconds
 M140 S0
 G0 Z5.9
 G0 X0 Y0
-T1
+T0
 G0 Z6.1
 G0 X1 Y10
 G0 Z1.1
