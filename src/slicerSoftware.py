@@ -8,6 +8,9 @@ import zipfile
 from pygerber.gerber.api import GerberFile, GerberJobFile
 from gscrib import GCodeBuilder
 
+GERBER_EXTENSIONS = {".gbr", ".gtl", ".gbl", ".gts", ".gbs", ".gto",
+                     ".gbo", ".gtp", ".gbp", ".gko", ".ger"}
+
 # absolute path to the src/ folder so all file paths work regardless of where you run the script
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -203,21 +206,63 @@ def extract_coords(gbr_path: str, offset_x: float = None, offset_y: float = None
         aperture_sizes[apt_id]  = size
         aperture_shapes[apt_id] = shape
 
+    # handle macro apertures — parse Altium AMPARAMS comment for exact dimensions
+    for match in re.finditer(r'G04:AMPARAMS\|DCode=(\d+)\|XSize=([\d.]+)mm\|YSize=([\d.]+)mm[^*]*Shape=(\w+)', source):
+        apt_id = match.group(1)
+        width  = float(match.group(2))
+        height = float(match.group(3))
+        shape  = match.group(4)
+        if apt_id not in aperture_sizes:
+            aperture_sizes[apt_id]  = width
+            aperture_shapes[apt_id] = f'RR:{height}' if shape == 'RoundedRectangle' else 'C'
+
+    # fallback for any remaining macro apertures without AMPARAMS
+    for match in re.finditer(r'%ADD(\d+)([A-Za-z]\w+)\*%', source):
+        apt_id = match.group(1)
+        if apt_id not in aperture_sizes:
+            aperture_sizes[apt_id]  = 1.4
+            aperture_shapes[apt_id] = 'C'
+
     # extract pad positions with their aperture size and shape
     raw = []
     current_aperture = None
 
+    current_x = 0.0
+    current_y = 0.0
     for line in source.split('\n'):
-        apt_match = re.match(r'D(\d+)\*', line.strip())
+        line = line.strip()
+        apt_match = re.match(r'D(\d+)\*', line)
         if apt_match and int(apt_match.group(1)) >= 10:
             current_aperture = apt_match.group(1)
-        d03_match = re.match(r'X(-?\d+)Y(-?\d+)D03', line.strip())
+
+        # update current position from any coordinate line (D02 = move only, no flash)
+        coord_move = re.match(r'X(-?\d+)Y(-?\d+)D02', line)
+        if coord_move:
+            current_x = int(coord_move.group(1)) / divisor * scale
+            current_y = int(coord_move.group(2)) / divisor * scale
+
+        # also handle X-only or Y-only moves (Altium omits unchanged axis)
+        x_only = re.match(r'X(-?\d+)D0[23]\*', line)
+        if x_only:
+            current_x = int(x_only.group(1)) / divisor * scale
+
+        y_only = re.match(r'Y(-?\d+)D0[23]\*', line)
+        if y_only:
+            current_y = int(y_only.group(1)) / divisor * scale
+
+        # D03 flash — use current position (may be on same line or separate line)
+        d03_match = re.match(r'X(-?\d+)Y(-?\d+)D03', line)
         if d03_match:
-            x     = int(d03_match.group(1)) / divisor * scale
-            y     = int(d03_match.group(2)) / divisor * scale
+            x = int(d03_match.group(1)) / divisor * scale
+            y = int(d03_match.group(2)) / divisor * scale
             size  = aperture_sizes.get(current_aperture, 0.2)
             shape = aperture_shapes.get(current_aperture, 'C')
             raw.append((x, y, size, shape))
+        elif re.match(r'D03\*', line):
+            # bare D03 — use tracked position
+            size  = aperture_sizes.get(current_aperture, 0.2)
+            shape = aperture_shapes.get(current_aperture, 'C')
+            raw.append((current_x, current_y, size, shape))
 
     if not raw:
         return [], 0, 0
@@ -276,6 +321,8 @@ def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None
     raw_segments = []
     current_x = 0.0
     current_y = 0.0
+    prev_x = 0.0
+    prev_y = 0.0
     current_aperture = None
     arc_mode = None  # 'G02' clockwise, 'G03' counterclockwise
 
@@ -339,21 +386,21 @@ def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None
             continue
 
         # linear move
-        coord_match = re.match(r'X(-?\d+)Y(-?\d+)(D0[123])', line)
-        if coord_match:
-            x   = int(coord_match.group(1)) / divisor * scale
-            y   = int(coord_match.group(2)) / divisor * scale
-            cmd = coord_match.group(3)
-            if cmd == 'D02':
-                current_x = x
-                current_y = y
-            elif cmd == 'D01':
-                raw_segments.append(((current_x, current_y), (x, y), trace_width))
-                current_x = x
-                current_y = y
-            elif cmd == 'D03':
-                current_x = x
-                current_y = y
+        # handle modal coordinates — Altium omits unchanged axis
+        x_match = re.match(r'X(-?\d+)', line)
+        y_match = re.match(r'.*Y(-?\d+)', line)
+        d_match = re.search(r'(D0[123])\*', line)
+
+        if d_match and not arc_match and not arc_i_match and not arc_j_match:
+            if x_match:
+                current_x = int(x_match.group(1)) / divisor * scale
+            if y_match:
+                current_y = int(y_match.group(1)) / divisor * scale
+            cmd = d_match.group(1)
+            if cmd == 'D01':
+                raw_segments.append(((prev_x, prev_y), (current_x, current_y), trace_width))
+            prev_x = current_x
+            prev_y = current_y
 
     if not raw_segments:
         return raw_segments, 0, 0
@@ -423,7 +470,7 @@ def find_trace_intersections(traces):
     # return paths
 
 def calculate_fill_passes(trace_width_mm: float, nozzle_size_mm: float) -> int:
-    return math.ceil(trace_width_mm / nozzle_size_mm)
+    return max(1, math.ceil(trace_width_mm / nozzle_size_mm))
 
 
 def generate_fill_offsets(x: float, y: float, next_x: float, next_y: float, nozzle_size: float, passes: int, trace_width: float) -> list[tuple[float, float]]:
@@ -607,6 +654,12 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
     else:
         print(f"Skipping extraction — {gerber_zip_path} already extracted or not a zip")
 
+    # if zip extracted into a single subfolder, use that as the scan dir
+    entries = os.listdir(extract_dir)
+    if len(entries) == 1 and os.path.isdir(os.path.join(extract_dir, entries[0])):
+        extract_dir = os.path.join(extract_dir, entries[0])
+        print(f"Using subfolder: {extract_dir}")
+
     # load the .gbrjob file
     gerber_job_file = configFile.get("gerberJobFile", "TestFiles/test-job.gbrjob")
     gerber_job_path = os.path.join(project_root, gerber_job_file)
@@ -652,7 +705,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
 
         # scan extracted directory for .gbr files
         for fname in sorted(os.listdir(extract_dir)):
-            if not fname.endswith(".gbr"):
+            if os.path.splitext(fname.lower())[1] not in GERBER_EXTENSIONS:
                 continue
             layer_type_full = get_layer_type_from_filename(fname)
             if layer_type_full == "unknown":
@@ -823,7 +876,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
                     seg_passes = calculate_fill_passes(seg_width, nozzle_size)
                     start_offsets = generate_fill_offsets(x, y, nx, ny, nozzle_size, seg_passes, trace_width=seg_width)
                     end_offsets   = list(reversed(generate_fill_offsets(nx, ny, x, y, nozzle_size, seg_passes, trace_width=seg_width)))
-                    for k in range(seg_passes):
+                    for k in range(min(seg_passes, len(start_offsets), len(end_offsets))):
                         sx, sy = start_offsets[k]
                         ex, ey = end_offsets[k]
                         if last_end is None or math.dist(last_end, (sx, sy)) > 0.001:
@@ -892,7 +945,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
                         seg_passes = calculate_fill_passes(seg_width, nozzle_size)
                         start_offsets = generate_fill_offsets(x, y, nx, ny, nozzle_size, seg_passes, trace_width=seg_width)
                         end_offsets   = list(reversed(generate_fill_offsets(nx, ny, x, y, nozzle_size, seg_passes, trace_width=seg_width)))
-                        for k in range(seg_passes):
+                        for k in range(min(seg_passes, len(start_offsets), len(end_offsets))):
                             sx, sy = start_offsets[k]
                             ex, ey = end_offsets[k]
                             g.rapid(z=over_safe_z)

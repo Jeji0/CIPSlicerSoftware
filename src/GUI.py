@@ -12,6 +12,7 @@ import slicerSoftware as ss
 import re
 from pygerber.gerber.api import GerberFile
 import os, json
+from slicerSoftware import GERBER_EXTENSIONS
 
 GERBfile = ""
 
@@ -172,11 +173,10 @@ def browse_job_file(fields):
         fields["gerberJobFile"].insert(0, path)
 
 def previewPCB(fields, root):
-    """Load and show PCB preview from the current gerber file without generating G-code."""
     gerber_zip = fields["gerberFile"].get()
     gerber_job_file = fields["gerberJobFile"].get()
-    if not gerber_zip or not gerber_job_file:
-        messagebox.showerror("Error", "Please set Gerber file and Job file first.")
+    if not gerber_zip:
+        messagebox.showerror("Error", "Please set Gerber file first.")
         return
 
     try:
@@ -184,31 +184,61 @@ def previewPCB(fields, root):
         project_root    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         gerber_zip_full = os.path.join(project_root, gerber_zip)
         extract_dir     = os.path.join(project_root, os.path.dirname(gerber_zip))
+        gerber_name     = os.path.splitext(os.path.basename(gerber_zip))[0]
+        extract_subdir  = os.path.join(extract_dir, gerber_name)
+        os.makedirs(extract_subdir, exist_ok=True)
 
         if gerber_zip.endswith(".zip") and os.path.exists(gerber_zip_full):
             with zipfile.ZipFile(gerber_zip_full, "r") as z:
-                z.extractall(extract_dir)
+                z.extractall(extract_subdir)
+
+        # if zip extracted into a single subfolder, use that as the scan dir
+        entries = os.listdir(extract_subdir)
+        if len(entries) == 1 and os.path.isdir(os.path.join(extract_subdir, entries[0])):
+            extract_subdir = os.path.join(extract_subdir, entries[0])
 
         gerber_job_path = os.path.join(project_root, gerber_job_file)
-        from pygerber.gerber.api import GerberJobFile
-        gerber_job = GerberJobFile.from_file(gerber_job_path)
-
         gbr_path = None
-        for fa in gerber_job.files_attributes:
-            if "copper" in fa.file_function.lower() and "top" in fa.file_function.lower():
-                gbr_path = os.path.join(project_root, os.path.dirname(gerber_zip), fa.path)
-                break
+
+        # try KiCad job file first
+        try:
+            from pygerber.gerber.api import GerberJobFile
+            gerber_job = GerberJobFile.from_file(gerber_job_path)
+            for fa in gerber_job.files_attributes:
+                if "copper" in fa.file_function.lower() and "top" in fa.file_function.lower():
+                    gbr_path = os.path.join(project_root, os.path.dirname(gerber_zip), fa.path)
+                    break
+        except Exception:
+            pass
+
+        # fallback: scan extracted directory for top copper by filename
+        if gbr_path is None:
+            print(f"scanning: {extract_subdir}")
+            print(f"files: {os.listdir(extract_subdir)}")
+            for fname in sorted(os.listdir(extract_subdir)):
+                if os.path.splitext(fname.lower())[1] not in GERBER_EXTENSIONS:
+                    continue
+                layer = ss.get_layer_type_from_filename(fname)
+                if layer == "copper_top":
+                    gbr_path = os.path.join(extract_subdir, fname)
+                    break
 
         if gbr_path is None:
             messagebox.showerror("Error", "Could not find top copper layer.")
             return
 
+        # detect scale and divisor from the actual gerber file
         gerber_file_raw = GerberFile.from_file(gbr_path)
-        all_matches     = re.findall(r'X(-?\d+)Y(-?\d+)D0[123]', gerber_file_raw.source_code)
-        all_raw_x       = [int(x) / 1_000_000 for x, y in all_matches]
-        all_raw_y       = [int(y) / 1_000_000 for x, y in all_matches]
-        global_min_x    = min(all_raw_x)
-        global_min_y    = min(all_raw_y)
+        source = gerber_file_raw.source_code
+        scale = 25.4 if "%MOIN*%" in source else 1.0
+        fmt_match = re.search(r'%FSLA[XY](\d)(\d)', source)
+        divisor = 10 ** int(fmt_match.group(2)) if fmt_match else 1_000_000
+
+        all_matches  = re.findall(r'X(-?\d+)Y(-?\d+)D0[123]', source)
+        all_raw_x    = [int(x) / divisor * scale for x, y in all_matches]
+        all_raw_y    = [int(y) / divisor * scale for x, y in all_matches]
+        global_min_x = min(all_raw_x)
+        global_min_y = min(all_raw_y)
 
         coords_prev, _, _ = ss.extract_coords(gbr_path, offset_x=global_min_x, offset_y=global_min_y)
         traces_prev, _, _ = ss.extract_traces(gbr_path, offset_x=global_min_x, offset_y=global_min_y)
@@ -298,8 +328,9 @@ def generateGcode(fields, output, btn, root):
             root.after(0, lambda: messagebox.showinfo("Success", "G-code generated successfully."))
 
         except Exception as e:
-            root.after(0, lambda: output.insert(tk.END, f"Error: {e}\n"))
-            root.after(0, lambda: messagebox.showerror("Error", str(e)))
+            err = str(e)
+            root.after(0, lambda: output.insert(tk.END, f"Error: {err}\n"))
+            root.after(0, lambda: messagebox.showerror("Error", err))
 
         root.after(0, lambda: btn.config(state=tk.NORMAL, text="Generate G-code"))
 
@@ -337,7 +368,7 @@ def validate_fields(fields):
             valid = False
 
     # check file fields not empty
-    for key in ["gerberFile", "gerberJobFile"]:
+    for key in ["gerberFile"]:
         entry = fields[key]
         if entry.get().strip() == "":
             entry.config(highlightbackground="red", highlightcolor="red", highlightthickness=2)
@@ -412,7 +443,7 @@ def GUI():
               command=lambda: browse_file(fields, "gerberFile")).grid(row=0, column=1)
 
     # Job file row
-    tk.Label(file_frame, text="Job file (.gbrjob)", font=("Helvetica", 11),
+    tk.Label(file_frame, text="Job file (.gbrjob)  —  optional for Altium", font=("Helvetica", 11),
              anchor="w").grid(row=1, column=0, sticky="w", pady=(8, 0))
     fields["gerberJobFile"] = tk.Entry(file_frame, font=("Helvetica", 11))
     fields["gerberJobFile"].grid(row=2, column=0, sticky="ew", padx=(0, 8))
