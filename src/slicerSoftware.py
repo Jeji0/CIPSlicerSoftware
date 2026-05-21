@@ -8,6 +8,9 @@ import zipfile
 from pygerber.gerber.api import GerberFile, GerberJobFile
 from gscrib import GCodeBuilder
 
+from shapely.geometry import LineString, Polygon, MultiPolygon
+from shapely.ops import unary_union
+
 GERBER_EXTENSIONS = {".gbr", ".gtl", ".gbl", ".gts", ".gbs", ".gto",
                      ".gbo", ".gtp", ".gbp", ".gko", ".ger"}
 
@@ -33,6 +36,56 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Note: Conductor 3 — no burnishing needed, no flipping needed
 # Note: insulator cover type determines if stop is at layer 3.5 or 4
 
+def generate_shapely_toolpaths(raw_segments, nozzle_size, stepover_ratio=0.85):
+    """
+    Merges overlapping trace segments and generates concentric fill paths.
+    raw_segments: list of ((start_x, start_y), (end_x, end_y), trace_width)
+    Returns a list of continuous paths (each path is a list of (x,y) tuples).
+    """
+    if not raw_segments:
+        return []
+
+    # 1. Convert centerlines into actual 2D area polygons
+    trace_polys = []
+    for (sx, sy), (ex, ey), width in raw_segments:
+        line = LineString([(sx, sy), (ex, ey)])
+        # Buffer by half the trace width to create the full trace area.
+        # cap_style=1 (round) mimics the natural spread of ink at segment ends.
+        poly = line.buffer(width / 2.0, cap_style=1, join_style=1)
+        trace_polys.append(poly)
+
+    # 2. Boolean Union: Merge all intersecting traces into one continuous geometry
+    merged_layer = unary_union(trace_polys)
+
+    # 3. Generate concentric toolpaths (Insetting)
+    toolpaths = []
+    
+    # The first pass must be inset by half the nozzle size so the *edge* # of the extruded ink aligns with the intended trace boundary.
+    current_inset = nozzle_size / 2.0 
+    stepover_dist = nozzle_size * stepover_ratio
+
+    while True:
+        # A negative buffer shrinks the polygon inward
+        path_geo = merged_layer.buffer(-current_inset)
+        
+        if path_geo.is_empty:
+            break # We have completely filled the interior of the traces
+
+        # Shapely might return a Polygon or a MultiPolygon (if the inset splits into islands)
+        geoms = path_geo.geoms if hasattr(path_geo, 'geoms') else [path_geo]
+        
+        for geom in geoms:
+            if isinstance(geom, Polygon):
+                # Add the outer boundary of this shape as a toolpath
+                toolpaths.append(list(geom.exterior.coords))
+                # Add any inner boundaries (like the edges of vias/holes)
+                for interior in geom.interiors:
+                    toolpaths.append(list(interior.coords))
+
+        # Move inward for the next concentric fill pass
+        current_inset += stepover_dist
+
+    return toolpaths
 
 def validate_config(config: dict) -> None:
     """Validate config.json values before running — catch bad inputs early."""
@@ -103,14 +156,9 @@ def get_head(configFile: dict, head_type: str) -> dict:
     return {}
 
 def get_head_for_layer(configFile: dict, layer_type: str) -> dict:
-    """Automatically select the correct head based on layer type.
-    copper → conductive head
-    paste  → solder paste head
-    between copper layers → insulator head"""
+    """Automatically select the correct head based on layer type."""
     if layer_type == "copper":
         return get_head(configFile, "conductive")
-    #if layer_type == "paste":
-        #return get_head(configFile, "paste")
     if layer_type == "insulator":
         return get_head(configFile, "insulator")
     return get_head(configFile, "conductive")  # default
@@ -123,24 +171,18 @@ def get_layer_type(file_function: str) -> str:
     """Detect layer type from the Gerber file_function field (KiCad job file)."""
     f = file_function.lower()
     if "copper" in f:       return "copper"
-    #if "solderpaste" in f:  return "paste"
     if "soldermask" in f:   return "mask"
     if "legend" in f:       return "silkscreen"
     if "profile" in f:      return "edge"
     return "unknown"
 
 def get_layer_type_from_filename(filename: str) -> str:
-    """Detect layer type from Gerber filename for boards without a standard .gbrjob.
-    Handles KiCad, Fusion, Altium, and Eagle naming conventions."""
+    """Detect layer type from Gerber filename for boards without a standard .gbrjob."""
     f = filename.lower()
     if any(x in f for x in ["copper_top", "f_cu", "top_copper", "gtl"]):
         return "copper_top"
     if any(x in f for x in ["copper_bottom", "b_cu", "bottom_copper", "gbl"]):
         return "copper_bottom"
-    #if any(x in f for x in ["solderpaste_top", "f_paste", "top_paste", "gtp"]):
-        #return "paste_top"
-    #if any(x in f for x in ["solderpaste_bottom", "b_paste", "bottom_paste", "gbp"]):
-        #return "paste_bottom"
     if any(x in f for x in ["soldermask_top", "f_mask", "top_mask", "gts"]):
         return "mask_top"
     if any(x in f for x in ["soldermask_bottom", "b_mask", "bottom_mask", "gbs"]):
@@ -158,19 +200,14 @@ def extract_coords(gbr_path: str, offset_x: float = None, offset_y: float = None
     """Extract X/Y pad coordinates with aperture sizes."""
     gerber_file = GerberFile.from_file(gbr_path)
     source = gerber_file.source_code
-    # detect units — Fusion exports in inches, KiCad in mm
-    # %MOIN*% = inches, %MOMM*% = mm
     scale = 25.4 if "%MOIN*%" in source else 1.0
-    # detect coordinate format — FSLAX34 = divide by 10^4, FSLAX56 = divide by 10^6
     fmt_match = re.search(r'%FSLA[XY](\d)(\d)', source)
     if fmt_match:
         decimal_places = int(fmt_match.group(2))
         divisor = 10 ** decimal_places
     else:
-        divisor = 1_000_000  # default KiCad format
+        divisor = 1_000_000
 
-
-    # parse aperture definitions — handle C, R, and RoundRect
     aperture_sizes  = {}
     aperture_shapes = {}
     for match in re.finditer(r'%ADD(\d+)([A-Za-z]+),([^*]+)\*%', source):
@@ -192,10 +229,8 @@ def extract_coords(gbr_path: str, offset_x: float = None, offset_y: float = None
                 dys    = [abs(float(params[i])) for i in range(2, len(params), 2)]
                 width  = max(dxs) * 2 if dxs else 0.2
                 height = max(dys) * 2 if dys else 0.2
-                # store as negative to signal it's a RoundRect with w/h
-                # encode width in size, height in shape string
                 size  = width
-                shape = f'RR:{height}'  # e.g. 'RR:0.2'
+                shape = f'RR:{height}'  
             except:
                 size  = 0.6
                 shape = 'C'
@@ -206,7 +241,6 @@ def extract_coords(gbr_path: str, offset_x: float = None, offset_y: float = None
         aperture_sizes[apt_id]  = size
         aperture_shapes[apt_id] = shape
 
-    # handle macro apertures — parse Altium AMPARAMS comment for exact dimensions
     for match in re.finditer(r'G04:AMPARAMS\|DCode=(\d+)\|XSize=([\d.]+)mm\|YSize=([\d.]+)mm[^*]*Shape=(\w+)', source):
         apt_id = match.group(1)
         width  = float(match.group(2))
@@ -216,32 +250,28 @@ def extract_coords(gbr_path: str, offset_x: float = None, offset_y: float = None
             aperture_sizes[apt_id]  = width
             aperture_shapes[apt_id] = f'RR:{height}' if shape == 'RoundedRectangle' else 'C'
 
-    # fallback for any remaining macro apertures without AMPARAMS
     for match in re.finditer(r'%ADD(\d+)([A-Za-z]\w+)\*%', source):
         apt_id = match.group(1)
         if apt_id not in aperture_sizes:
             aperture_sizes[apt_id]  = 1.4
             aperture_shapes[apt_id] = 'C'
 
-    # extract pad positions with their aperture size and shape
     raw = []
     current_aperture = None
-
     current_x = 0.0
     current_y = 0.0
+    
     for line in source.split('\n'):
         line = line.strip()
         apt_match = re.match(r'D(\d+)\*', line)
         if apt_match and int(apt_match.group(1)) >= 10:
             current_aperture = apt_match.group(1)
 
-        # update current position from any coordinate line (D02 = move only, no flash)
         coord_move = re.match(r'X(-?\d+)Y(-?\d+)D02', line)
         if coord_move:
             current_x = int(coord_move.group(1)) / divisor * scale
             current_y = int(coord_move.group(2)) / divisor * scale
 
-        # also handle X-only or Y-only moves (Altium omits unchanged axis)
         x_only = re.match(r'X(-?\d+)D0[23]\*', line)
         if x_only:
             current_x = int(x_only.group(1)) / divisor * scale
@@ -250,7 +280,6 @@ def extract_coords(gbr_path: str, offset_x: float = None, offset_y: float = None
         if y_only:
             current_y = int(y_only.group(1)) / divisor * scale
 
-        # D03 flash — use current position (may be on same line or separate line)
         d03_match = re.match(r'X(-?\d+)Y(-?\d+)D03', line)
         if d03_match:
             x = int(d03_match.group(1)) / divisor * scale
@@ -259,7 +288,6 @@ def extract_coords(gbr_path: str, offset_x: float = None, offset_y: float = None
             shape = aperture_shapes.get(current_aperture, 'C')
             raw.append((x, y, size, shape))
         elif re.match(r'D03\*', line):
-            # bare D03 — use tracked position
             size  = aperture_sizes.get(current_aperture, 0.2)
             shape = aperture_shapes.get(current_aperture, 'C')
             raw.append((current_x, current_y, size, shape))
@@ -272,9 +300,7 @@ def extract_coords(gbr_path: str, offset_x: float = None, offset_y: float = None
     return [(x - min_x, y - min_y, size, shape) for x, y, size, shape in raw], min_x, min_y
 
 def approximate_arc(x1, y1, x2, y2, i, j, clockwise, segments=16):
-    """Approximate a Gerber arc as linear segments.
-    i, j are center offsets from start point.
-    Returns list of (x, y) points along the arc."""
+    """Approximate a Gerber arc as linear segments."""
     cx = x1 + i
     cy = y1 + j
     r = math.sqrt(i**2 + j**2)
@@ -307,7 +333,6 @@ def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None
     else:
         divisor = 1_000_000
 
-    # parse aperture sizes for traces
     aperture_sizes = {}
     for match in re.finditer(r'%ADD(\d+)([A-Za-z]+),([^*]+)\*%', source):
         apt_id   = match.group(1)
@@ -324,12 +349,11 @@ def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None
     prev_x = 0.0
     prev_y = 0.0
     current_aperture = None
-    arc_mode = None  # 'G02' clockwise, 'G03' counterclockwise
+    arc_mode = None 
 
     for line in source.split('\n'):
         line = line.strip()
         
-        # track arc mode (handles both same-line and separate-line G02/G03)
         if 'G02' in line:
             arc_mode = 'G02'
         elif 'G03' in line:
@@ -343,7 +367,6 @@ def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None
 
         trace_width = max(aperture_sizes.get(current_aperture, min_trace_width), min_trace_width)
 
-        # arc move: G02/G03 may be on same line as coordinates (KiCad format)
         arc_match = re.match(r'(?:G0[23])?X(-?\d+)Y(-?\d+)I(-?\d+)J(-?\d+)D01', line)
         if not arc_match:
             arc_match = re.match(r'X(-?\d+)Y(-?\d+)I(-?\d+)J(-?\d+)D01', line)
@@ -360,7 +383,6 @@ def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None
             current_y = y
             continue
 
-        # arc with only I (no J) or only J (no I)
         arc_i_match = re.match(r'X(-?\d+)Y(-?\d+)I(-?\d+)D01', line)
         if arc_i_match:
             x = int(arc_i_match.group(1)) / divisor * scale
@@ -385,8 +407,6 @@ def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None
             current_y = y
             continue
 
-        # linear move
-        # handle modal coordinates — Altium omits unchanged axis
         x_match = re.match(r'X(-?\d+)', line)
         y_match = re.match(r'.*Y(-?\d+)', line)
         d_match = re.search(r'(D0[123])\*', line)
@@ -414,90 +434,8 @@ def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None
                   for (sx, sy), (ex, ey), tw in raw_segments]
     return normalized, min_x, min_y
 
-
-def segments_intersect(p1, p2, p3, p4):
-    """Check if segment p1-p2 intersects p3-p4. Returns intersection point or None.
-    Uses 0.01 threshold to avoid detecting shared endpoints as crossings."""
-    x1,y1 = p1; x2,y2 = p2; x3,y3 = p3; x4,y4 = p4
-    denom = (x1-x2)*(y3-y4) - (y1-y2)*(x3-x4)
-    if abs(denom) < 1e-10:
-        return None
-    t = ((x1-x3)*(y3-y4) - (y1-y3)*(x3-x4)) / denom
-    u = -((x1-x2)*(y1-y3) - (y1-y2)*(x1-x3)) / denom
-    if 0.01 < t < 0.99 and 0.01 < u < 0.99:
-        return (x1 + t*(x2-x1), y1 + t*(y2-y1))
-    return None
-
-def find_trace_intersections(traces):
-    crossings = []
-    for i in range(len(traces)):
-        for j in range(i+1, len(traces)):
-            pt = segments_intersect(traces[i][0], traces[i][1], traces[j][0], traces[j][1])
-            if pt:
-                crossings.append((pt[0], pt[1], i, j))
-    return crossings
-
-#def chain_segments(traces, tolerance=0.001):
-    # """Chain trace segments that share endpoints into continuous paths.
-    # Returns list of (points, trace_width) tuples."""
-    # used = [False] * len(traces)
-    # paths = []
-
-    # for start in range(len(traces)):
-    #     if used[start]:
-    #         continue
-    #     used[start] = True
-    #     s, e, tw = traces[start]
-    #     path = [s, e]
-    #     path_width = tw
-
-    #     changed = True
-    #     while changed:
-    #         changed = False
-    #         for k in range(len(traces)):
-    #             if used[k]:
-    #                 continue
-    #             s, e, tw = traces[k]
-    #             if math.dist(path[-1], s) < tolerance:
-    #                 path.append(e)
-    #                 used[k] = True
-    #                 changed = True
-    #             elif math.dist(path[-1], e) < tolerance:
-    #                 path.append(s)
-    #                 used[k] = True
-    #                 changed = True
-    #     paths.append((path, path_width))
-    # return paths
-
-def calculate_fill_passes(trace_width_mm: float, nozzle_size_mm: float) -> int:
-    return max(1, math.ceil(trace_width_mm / nozzle_size_mm))
-
-
-def generate_fill_offsets(x: float, y: float, next_x: float, next_y: float, nozzle_size: float, passes: int, trace_width: float) -> list[tuple[float, float]]:
-    dx = next_x - x
-    dy = next_y - y
-    length = math.sqrt(dx**2 + dy**2)
-    if length == 0:
-        return [(x, y)]
-    perp_x = -dy / length
-    perp_y = dx / length
-    if passes == 1:
-        spacing = 0
-    else:
-        overlap = (passes * nozzle_size - trace_width) / (passes - 1)
-        spacing = nozzle_size - overlap
-    points = []
-    for i in range(passes):
-        offset = (i - (passes - 1) / 2) * spacing
-        ox = max(0, x + perp_x * offset)
-        oy = max(0, y + perp_y * offset)
-        points.append((ox, oy))
-    return points
-
 def generate_pad_spiral(cx: float, cy: float, radius: float, nozzle_size: float, use_arc_moves: bool = False) -> list[tuple[float, float, bool, float, float]]:
-    """Fill a circular pad with concentric circles from center outward.
-    use_arc_moves=True: returns arc metadata for G2 output
-    use_arc_moves=False: returns linearized points for G1 output"""
+    """Fill a circular pad with concentric circles from center outward."""
     points = []
     step       = nozzle_size * 0.8
     angle_step = 0.15
@@ -505,7 +443,6 @@ def generate_pad_spiral(cx: float, cy: float, radius: float, nozzle_size: float,
     r = step
     while r <= radius:
         if use_arc_moves:
-            # full circle: start = (cx+r, cy), I=-r, J=0
             points.append((cx + r, cy, True, -r, 0))
             points.append((cx + r, cy, False, -r, 0))
         else:
@@ -520,7 +457,8 @@ def generate_pad_spiral(cx: float, cy: float, radius: float, nozzle_size: float,
     return points
 
 def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
-    """Fill rectangular pad with a single continuous rectangular spiral from outside inward."""
+    """Fill pad (Rectangle or Circle) with a continuous spiral."""
+    
     if shape.startswith('RR:'):
         width  = size
         height = float(shape.split(':')[1])
@@ -551,13 +489,12 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
             points.append((cx - w, cy + h))
 
         if h > 0:
-            points.append((cx + w, cy + h))   # top-right
-            points.append((cx + w, cy - h))   # bottom-right
-            points.append((cx - w, cy - h))   # bottom-left
+            points.append((cx + w, cy + h))   
+            points.append((cx + w, cy - h))   
+            points.append((cx - w, cy - h))   
             points.append((cx - w, cy + next_h))
             points.append((cx - next_w, cy + next_h))
         else:
-            # h=0, only horizontal line remains
             points.append((cx + w, cy))
             points.append((cx + next_w, cy))
             break
@@ -568,35 +505,18 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
     return segments
 
 def camera_sweep(g, safe_z: float, board_size_x: float = 0, board_size_y: float = 0, layer_index: int = 0) -> bool:
-    """Camera sweep after each ink + cure sequence.
-    Moves to sweep position and triggers CV system to check for shorts/coverage.
-    Returns True if pass, False if fail — False stops the print.
-    PLACEHOLDER - sweep pattern and CV communication to be confirmed with camera team."""
+    """Camera sweep after each ink + cure sequence."""
     g.rapid(z=safe_z)
     g.rapid(x=0, y=0)
-
-    # PLACEHOLDER - trigger CV system here
-    # CV system should receive: board_size_x, board_size_y, layer_index
-    # CV system should return: pass/fail
-    # Example future implementation:
-    # result = cv_system.check(board_size_x, board_size_y, layer_index)
-    # if not result:
-    #     print(f"  CV check failed on layer {layer_index} — stopping print")
-    #     return False
-
     print(f"camera sweep layer {layer_index} (placeholder) — board {board_size_x}x{board_size_y}mm")
     return True
 
-
 def deposit_insulator(g, coords: list, work_z: float, safe_z: float, nozzle_size: float, configFile: dict) -> None:
-    """Deposit insulator layer (ACI SI3104) over all pad positions.
-    Insulator is on a separate head — head offset from config is applied.
-    Cure process: heat to 135C, hold for 5-15 minutes, cool down."""
+    """Deposit insulator layer (ACI SI3104) over all pad positions."""
     if not coords:
         print("  no coords for insulator layer, skipping")
         return
 
-    # apply head offset for insulator head — confirm real offset with hardware team
     insulator_head = get_head(configFile, "insulator")
     offset_x = insulator_head.get("offsetX", 0)
     offset_y = insulator_head.get("offsetY", 0)
@@ -610,11 +530,10 @@ def deposit_insulator(g, coords: list, work_z: float, safe_z: float, nozzle_size
         g.move(z=work_z)
         g.rapid(z=safe_z)
 
-    # M190 blocks until bed reaches temperature before dwell starts
     print(f"  insulator cure: 135C for {insulator_cure_seconds}s")
     g.write(f"M190 S{int(insulator_head.get('cureTemp', 135))}")
     g.sleep(insulator_cure_seconds)
-    g.write("M140 S0")  # turn off heater after cure
+    g.write("M140 S0")
 
 def move_with_extrusion(g, x: float, y: float, from_x: float, from_y: float,
                          current_e: float, multiplier: float, enable_extrusion: bool) -> float:
@@ -644,21 +563,18 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
     # load head profiles
     conductive_head = get_head(configFile, "conductive")
 
-
-    # Ender 3 default steps/mm — confirm if machine has been recalibrated
     steps_per_mm_x   = configFile.get("steps_per_mm_x", 80)
     steps_per_mm_y   = configFile.get("steps_per_mm_y", 80)
     steps_per_mm_z   = configFile.get("steps_per_mm_z", 400)
 
     # derive output .gcode path from the zip path in config
-    # gerberFile path is relative to project root (one level up from src/)
     gerber_zip_path = configFile.get("gerberFile", "TestFiles/test-gbr.zip")
     project_root    = os.path.dirname(BASE_DIR)
     gerber_zip_full = os.path.join(project_root, gerber_zip_path)
     gerber_dir      = os.path.join(project_root, os.path.dirname(gerber_zip_path))
     gerber_name     = os.path.splitext(os.path.basename(gerber_zip_path))[0]
     output_file     = os.path.join(gerber_dir, gerber_name + ".gcode")
-    extract_dir = os.path.join(gerber_dir, gerber_name)
+    extract_dir     = os.path.join(gerber_dir, gerber_name)
     os.makedirs(extract_dir, exist_ok=True)
 
     # unzip Gerber files before loading the job file
@@ -679,8 +595,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
     gerber_job_file = configFile.get("gerberJobFile", "TestFiles/test-job.gbrjob")
     gerber_job_path = os.path.join(project_root, gerber_job_file)
 
-    # try to parse as standard KiCad job file first
-    # fall back to manual parsing for Fusion/Altium formats
     board_size_x  = 220
     board_size_y  = 220
     board_layers  = 2
@@ -704,7 +618,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
         print(f"Board: {board_size_x}x{board_size_y}mm, {board_layers} layers (KiCad job file)")
 
     except Exception:
-        # fall back to manual job file parsing + filename detection
         print("Standard job file not found or invalid — falling back to filename detection")
         try:
             with open(gerber_job_path, "r") as f:
@@ -718,7 +631,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
         except Exception:
             print("Could not parse job file — using defaults")
 
-        # scan extracted directory for .gbr files
         for fname in sorted(os.listdir(extract_dir)):
             if os.path.splitext(fname.lower())[1] not in GERBER_EXTENSIONS:
                 continue
@@ -726,308 +638,160 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
             if layer_type_full == "unknown":
                 print(f"  skipping {fname} (unknown layer type)")
                 continue
-            # map to simple layer type
+            
+            # Map full filename designation to a simple internal layer type string
             if "copper" in layer_type_full:
                 layer_type = "copper"
             elif "paste" in layer_type_full:
                 layer_type = "paste"
+            elif "mask" in layer_type_full:
+                layer_type = "mask"
+            elif "silkscreen" in layer_type_full:
+                layer_type = "silkscreen"
+            elif "edge" in layer_type_full:
+                layer_type = "edge"
             else:
-                layer_type = layer_type_full
-            is_bottom = "bottom" in layer_type_full
-            gbr_path  = os.path.join(extract_dir, fname)
+                layer_type = "unknown"
+
+            is_bottom = "bottom" in layer_type_full or "bot" in layer_type_full
+            gbr_path = os.path.join(extract_dir, fname)
             files_to_process.append((gbr_path, layer_type, is_bottom))
-            print(f"  found {fname} → {layer_type_full}")
 
-    print(f"Board: {board_size_x}x{board_size_y}mm, {board_layers} layers, copper thickness: {copper_thickness}mm")
 
-    # auto set layer mode based on board layer count if not set in config
-    if "layerMode" not in configFile:
-        layer_mode = "multi" if board_layers > 1 else "single"
-        print(f"Auto layer mode: {layer_mode}")
+    # --- G-Code Generation Phase ---
+    g = GCodeBuilder(output=output_file)
+    g.write("; --- BEGIN PRINT ---")
+    g.write("G90 ; absolute coordinates")
+    g.write("M82 ; absolute extrusion")
 
-    # write G-code using gscrib
-    with GCodeBuilder(output=output_file) as g:
+    layer_mode = configFile.get("layerMode", "single")
 
-        # machine setup
-        g.set_bounds("axes", min=(0, 0, 0), max=(configFile["maxBedSize"][0], configFile["maxBedSize"][1], 50))
-        g.set_axis(point=(0, 0, 0))          # set current position as origin
-        g.set_length_units("millimeters")
-        g.set_time_units("seconds")
-        g.set_distance_mode("absolute")      # all moves are absolute, not relative
-        g.set_feed_rate(configFile.get("printSpeed", 60) * 10)  # convert mm/s to mm/min
+    for gbr_path, layer_type, is_bottom in files_to_process:
+        fname = os.path.basename(gbr_path)
 
-        # home all axes before starting
-        g.auto_home()
+        # skip non-printable layers
+        if layer_type not in ["copper", "paste", "insulator"]:
+            print(f"  skipping {fname} ({layer_type})")
+            continue
 
-        if enable_extrusion:
-            g.write("M82 ; absolute extrusion mode")
-            g.write("G92 E0 ; reset E axis")
+        # in single mode skip bottom layers
+        if layer_mode == "single" and is_bottom:
+            print(f"  skipping {fname} (bottom layer in single mode)")
+            continue
+            
+        print(f"\n--- Processing Layer: {fname} ({layer_type}) ---")
 
-        # lift to safe height and start tool
-        g.rapid(z=5)
-        g.tool_on("clockwise", 1000)
-        g.sleep(1)
+        if layer_type == "copper":
+            offset_x = 10 
+            offset_y = 10  
+            min_trace_width = conductive_head.get("traceWidth", 0.225)
+            nozzle_size = conductive_head.get("nozzleSize", 0.225)
+            
+            # 1. Extract Data
+            raw_segments, min_x, min_y = extract_traces(
+                gbr_path, offset_x=offset_x, offset_y=offset_y, min_trace_width=min_trace_width
+            )
+            pads, _, _ = extract_coords(gbr_path, offset_x=offset_x, offset_y=offset_y)
 
-        # single mode = top copper only, multi mode = all copper layers
-        layer_mode  = configFile.get("layerMode", "single")
-        layer_index = 0
-        print(f"Layer mode: {layer_mode}")
+            # 2. Process Traces (Shapely)
+            if raw_segments:
+                print(f"  extracted {len(raw_segments)} trace segments")
+                layer_toolpaths = generate_shapely_toolpaths(raw_segments, nozzle_size)
+                
+                for path in layer_toolpaths:
+                    if not path or len(path) < 2: continue
+                    start_x, start_y = path[0]
+                    g.rapid(z=5)
+                    g.rapid(point=(start_x, start_y))
+                    g.move(z=0.2)
+                    for x, y in path[1:]:
+                        current_e = move_with_extrusion(g, x, y, start_x, start_y, current_e, extrusion_multiplier, enable_extrusion)
+                        start_x, start_y = x, y
+                    if enable_extrusion:
+                        current_e -= retraction_distance
+                        g.write(f"G1 E{current_e:.5f} F1800")
 
-        for gbr_path, layer_type, is_bottom in files_to_process:
-            fname = os.path.basename(gbr_path)
-
-            # skip non-printable layers
-            if layer_type not in ["copper", "paste"]:
-                print(f"  skipping {fname} ({layer_type})")
-                continue
-
-            # in single mode skip bottom layers
-            if layer_mode == "single" and is_bottom:
-                print(f"  skipping {fname} (single layer mode)")
-                continue
-
-            # find global minimum across ALL Gerber commands (D01, D02, D03)
-            gerber_file_raw = GerberFile.from_file(gbr_path)
-            all_matches = re.findall(r'X(-?\d+)Y(-?\d+)D0[123]', gerber_file_raw.source_code)
-            if not all_matches:
-                print(f"  no coordinates found in {fname}, skipping")
-                continue
-
-            # detect units
-            scale = 25.4 if "%MOIN*%" in gerber_file_raw.source_code else 1.0
-            # detect coordinate format
-            fmt_match = re.search(r'%FSLA[XY](\d)(\d)', gerber_file_raw.source_code)
-            if fmt_match:
-                decimal_places = int(fmt_match.group(2))
-                divisor = 10 ** decimal_places
-            else:
-                divisor = 1_000_000
-            all_raw_x    = [int(x) / divisor * scale for x, y in all_matches]
-            all_raw_y    = [int(y) / divisor * scale for x, y in all_matches]
-            global_min_x = min(all_raw_x) - 1.0
-            global_min_y = min(all_raw_y) - 2.0
-
-            coords, _, _ = extract_coords(gbr_path, offset_x=global_min_x, offset_y=global_min_y)
-            for i, (x, y, s, sh) in enumerate(coords[:10]):
-                print(f"  pad[{i}]: ({x:.3f},{y:.3f}) size={s:.4f} shape={sh}")
-            _nozzle_size = get_head_for_layer(configFile, layer_type).get("nozzleSize", 0.225)
-            traces, _, _ = extract_traces(gbr_path, offset_x=global_min_x, offset_y=global_min_y, min_trace_width=_nozzle_size)
-            traces = [(s, e, tw) for s, e, tw in traces if tw <= 2.0]
-        
-
-            if not coords:
-                print(f"  no pads found in {fname}, skipping")
-                continue
-
-            out_of_bounds = [(x, y) for x, y, s, sh in coords if x > board_size_x or y > board_size_y]
-            if out_of_bounds:
-                print(f"WARNING: {len(out_of_bounds)} coords exceed board size — skipping them")
-                coords = [(x, y, s, sh) for x, y, s, sh in coords if x <= board_size_x and y <= board_size_y]
-
-            # filter out oversized pads (copper pours, fill zones)
-            coords = [(x, y, s, sh) for x, y, s, sh in coords if s <= 10.0]
-
-            # mirror bottom layer coordinates on X axis
-            if is_bottom:
-                board_max_x = max(x for x, y, s, sh in coords)
-                coords  = [(board_max_x - x, y, s, sh) for x, y, s, sh in coords]
-                traces  = [((board_max_x - sx, sy), (board_max_x - ex, ey), tw) for (sx, sy), (ex, ey), tw in traces]
-
-            layer_height           = configFile.get("conductiveLayerHeight", 0.2)
-            insulator_layer_height = configFile.get("insulatorLayerHeight", 0.2)
-            board_thickness     = configFile.get("boardThickness", 0.0)
-            print_height_offset = configFile.get("printHeightOffset", 0.5)
-            #work_z = board_thickness + print_height_offset + (layer_index * layer_height)
-            work_z = 1
-            safe_z = work_z + 5
-            active_head      = get_head_for_layer(configFile, layer_type)
-            tool_number      = get_tool_number(active_head)
-            if enable_tool_change:
-                g.write(f"T{tool_number}")
-            print(f"  tool change: T{tool_number} ({active_head.get('id', 'unknown')})")
-            cure_dry_seconds = active_head.get("cureDrySeconds", 300)
-            cure_seconds     = active_head.get("cureSeconds", 900)
-            nozzle_size      = active_head.get("nozzleSize", 0.225)
-            trace_width      = active_head.get("traceWidth", 0.225)
-            fill_passes      = calculate_fill_passes(trace_width, nozzle_size)
-            print(f"  processing {fname} ({layer_type}) — {len(coords)} pads — Z depth: {work_z:.2f}mm")
-
-            # deposit ink on each pad using raster fill based on aperture size
-            for px, py, pad_size, pad_shape in coords:
-                if pad_size <= nozzle_size:
-                    g.rapid(z=safe_z)
-                    g.rapid(point=(px, py))
-                    g.rapid(z=work_z)
-                else:
-                    if pad_shape == 'C':
-                        circles = generate_pad_spiral(px, py, pad_size / 2, nozzle_size, use_arc_moves=use_arc_moves)
+            # 3. Process Pads
+            if pads:
+                print(f"  extracted {len(pads)} pads")
+                for px, py, size, shape in pads:
+                    if shape == 'C':
+                        # circular pad — use spiral fill
+                        circles = generate_pad_spiral(px, py, size / 2, nozzle_size, use_arc_moves=use_arc_moves)
+                        g.rapid(z=5)
+                        g.rapid(point=(circles[0][0], circles[0][1]))
+                        g.move(z=0.2)
+                        last_x, last_y = circles[0][0], circles[0][1]
                         for cx, cy, new_circle, arc_i, arc_j in circles:
                             if new_circle:
-                                g.rapid(z=safe_z)
+                                g.rapid(z=5)
                                 g.rapid(point=(cx, cy))
-                                g.rapid(z=work_z)
-                            elif use_arc_moves:
-                                # G2 full circle: end = start, I/J = center offset
-                                g.write(f"G2 X{cx:.4f} Y{cy:.4f} I{arc_i:.4f} J{arc_j:.4f}")
+                                g.move(z=0.2)
                             else:
-                                g.move(point=(cx, cy))
-                        g.rapid(z=safe_z)
+                                current_e = move_with_extrusion(g, cx, cy, last_x, last_y, current_e, extrusion_multiplier, enable_extrusion)
+                            last_x, last_y = cx, cy
+                        g.rapid(z=5)
                     else:
-                        lines = generate_pad_raster(px, py, pad_size, nozzle_size, pad_shape)
-                        if lines:
-                            g.rapid(z=safe_z)
-                            g.rapid(point=(lines[0][0], lines[0][1]))
-                            g.rapid(z=work_z)
-                            for sx, sy, ex, ey in lines:
-                                g.move(point=(sx, sy))
-                                g.move(point=(ex, ey))
-                            g.rapid(z=safe_z)
+                        # rectangular/roundrect pad — use raster fill
+                        segments = generate_pad_raster(px, py, size, nozzle_size, shape=shape)
+                        if segments:
+                            g.rapid(z=5)
+                            g.rapid(point=(segments[0][0], segments[0][1]))
+                            g.move(z=0.2)
+                            last_x, last_y = segments[0][0], segments[0][1]
+                            for sx, sy, ex, ey in segments:
+                                current_e = move_with_extrusion(g, ex, ey, sx, sy, current_e, extrusion_multiplier, enable_extrusion)
+                                last_x, last_y = ex, ey
+                            g.rapid(z=5)
 
+            # 2. Generate the continuous, perfectly mitered toolpaths using Shapely
+            nozzle_size = conductive_head.get("nozzleSize", 0.225)
+            layer_toolpaths = generate_shapely_toolpaths(raw_segments, nozzle_size)
+            print(f"  generated {len(layer_toolpaths)} continuous toolpaths")
 
+            # 3. Write G-code for the generated toolpaths
+            for path in layer_toolpaths:
+                if not path or len(path) < 2:
+                    continue
+                    
+                start_x, start_y = path[0]
+                
+                # Rapid move to the start of the contour
+                g.rapid(z=5) # Safe travel Z
+                g.rapid(point=(start_x, start_y))
+                g.move(z=0.2) # Work Z
+                
+                # Extrude along the contour
+                for x, y in path[1:]:
+                    current_e = move_with_extrusion(
+                        g, x, y, 
+                        from_x=start_x, from_y=start_y, 
+                        current_e=current_e, 
+                        multiplier=extrusion_multiplier, 
+                        enable_extrusion=enable_extrusion
+                    )
+                    start_x, start_y = x, y
+                    
+                # Retract the ink slightly before the tool lifts to prevent stringing
+                if enable_extrusion:
+                    current_e -= retraction_distance
+                    g.write(f"G1 E{current_e:.5f} F1800 ; retract ink")
 
-            if traces:
-                crossings = find_trace_intersections(traces)
-                print(f"  processing {len(traces)} trace segments — {fill_passes} fill pass(es) — {len(crossings)} crossings")
+        elif layer_type == "paste":
+            # You can add the specific solder paste execution logic here later
+            pass
+            
+        elif layer_type == "insulator":
+            # You can extract pad coordinates and run deposit_insulator() here later
+            pass
 
-                # layer 1: deposit all traces, minimize Z lifts between connected segments
-                print(f"  depositing {len(traces)} trace segments")
-                last_end = None
-                for (x, y), (nx, ny), seg_width in traces:
-                    seg_passes = calculate_fill_passes(seg_width, nozzle_size)
-                    start_offsets = generate_fill_offsets(x, y, nx, ny, nozzle_size, seg_passes, trace_width=seg_width)
-                    end_offsets   = list(reversed(generate_fill_offsets(nx, ny, x, y, nozzle_size, seg_passes, trace_width=seg_width)))
-                    for k in range(min(seg_passes, len(start_offsets), len(end_offsets))):
-                        sx, sy = start_offsets[k]
-                        ex, ey = end_offsets[k]
-                        if last_end is None or math.dist(last_end, (sx, sy)) > 0.001:
-                            if enable_extrusion:
-                                g.write(f"G1 E{current_e - retraction_distance:.5f}")
-                            g.rapid(z=safe_z)
-                            g.rapid(point=(sx, sy))
-                            g.rapid(z=work_z)
-                            if enable_extrusion:
-                                g.write(f"G1 E{current_e:.5f}")
-                        else:
-                            current_e = move_with_extrusion(g, sx, sy, last_end[0], last_end[1], current_e, extrusion_multiplier, enable_extrusion)
-                        current_e = move_with_extrusion(g, ex, ey, sx, sy, current_e, extrusion_multiplier, enable_extrusion)
-                        last_end = (ex, ey)
-
-                # layer 1 cure
-                if layer_type == "copper":
-                    if enable_heating:
-                        print(f"  cure stage 1: dry 90C for 5min")
-                        g.write(f"M190 S{int(active_head.get('cureDryTemp', 90))}")
-                        g.sleep(cure_dry_seconds)
-                        print(f"  cure stage 2: sinter 170C for 15min")
-                        g.write(f"M190 S{int(active_head.get('cureTemp', 170))}")
-                        g.sleep(cure_seconds)
-                        g.write("M140 S0")
-                    if enable_camera_sweep:
-                        camera_sweep(g, safe_z, board_size_x, board_size_y, layer_index)
-
-                if crossings and enable_crossover:
-                    insulator_head = get_head(configFile, "insulator")
-                    ins_tool       = get_tool_number(insulator_head)
-                    ins_size       = nozzle_size * 6
-                    ins_work_z     = work_z + layer_height
-                    ins_safe_z     = ins_work_z + 5
-                    over_work_z    = work_z + layer_height + insulator_layer_height
-                    over_safe_z    = over_work_z + 5
-                    cap_work_z     = over_work_z + layer_height
-                    cap_safe_z     = cap_work_z + 5
-                    over_segs      = set()
-                    for _, _, i, j in crossings:
-                        over_segs.add(i)
-                        over_segs.add(j)
-                   
-                    # layer 3: insulator over full length of both crossing traces
-                    if enable_tool_change:
-                        g.write(f"T{ins_tool}")
-                    print(f"  depositing insulator over crossing trace segments")
-                    for idx in over_segs:
-                        (x, y), (nx, ny), _ = traces[idx]
-                        g.rapid(z=ins_safe_z)
-                        g.rapid(point=(x, y))
-                        g.rapid(z=ins_work_z)
-                        g.move(point=(nx, ny))
-                        g.rapid(z=ins_safe_z)
-
-                    # layer 3 cure
-                    if enable_heating:
-                        g.write(f"M190 S{int(insulator_head.get('cureTemp', 135))}")
-                        g.sleep(insulator_head.get('cureSeconds', 600))
-                        g.write("M140 S0")
-                    if enable_camera_sweep:
-                        camera_sweep(g, over_safe_z, board_size_x, board_size_y, layer_index)
-
-                    # layer 5: conductive over-traces
-                    if enable_tool_change:
-                        g.write(f"T{tool_number}")
-                    print(f"  redrawing over-traces at Z{over_work_z:.2f}")
-                    for idx in over_segs:
-                        (x, y), (nx, ny), seg_width = traces[idx]
-                        seg_passes = calculate_fill_passes(seg_width, nozzle_size)
-                        start_offsets = generate_fill_offsets(x, y, nx, ny, nozzle_size, seg_passes, trace_width=seg_width)
-                        end_offsets   = list(reversed(generate_fill_offsets(nx, ny, x, y, nozzle_size, seg_passes, trace_width=seg_width)))
-                        for k in range(min(seg_passes, len(start_offsets), len(end_offsets))):
-                            sx, sy = start_offsets[k]
-                            ex, ey = end_offsets[k]
-                            g.rapid(z=over_safe_z)
-                            g.rapid(point=(sx, sy))
-                            g.rapid(z=over_work_z)
-                            g.move(point=(ex, ey))
-
-                    # layer 5 cure
-                    if layer_type == "copper":
-                        if enable_heating:
-                            print(f"  cure over-traces stage 1: dry 90C for 5min")
-                            g.write(f"M190 S{int(active_head.get('cureDryTemp', 90))}")
-                            g.sleep(cure_dry_seconds)
-                            print(f"  cure over-traces stage 2: sinter 170C for 15min")
-                            g.write(f"M190 S{int(active_head.get('cureTemp', 170))}")
-                            g.sleep(cure_seconds)
-                            g.write("M140 S0")
-                        if enable_camera_sweep:
-                            camera_sweep(g, over_safe_z, board_size_x, board_size_y, layer_index)
-
-                    # layer 7: insulator cap over full length of over-traces
-                    if enable_tool_change:
-                        g.write(f"T{ins_tool}")
-                    print(f"  depositing insulator cap over over-trace segments")
-                    for idx in over_segs:
-                        (x, y), (nx, ny), _ = traces[idx]
-                        g.rapid(z=cap_safe_z)
-                        g.rapid(point=(x, y))
-                        g.rapid(z=cap_work_z)
-                        g.move(point=(nx, ny))
-                        g.rapid(z=cap_safe_z)
-
-                    # layer 7 cure
-                    if enable_heating:
-                        g.write(f"M190 S{int(insulator_head.get('cureTemp', 135))}")
-                        g.sleep(insulator_head.get('cureSeconds', 600))
-                        g.write("M140 S0")
-                    if enable_camera_sweep:
-                        camera_sweep(g, over_safe_z, board_size_x, board_size_y, layer_index)
-
-            else:
-                print(f"  no traces found in {fname}")
-
-
-            # deposit insulator between copper layers in multi mode
-            if layer_mode == "multi" and layer_index < board_layers - 1:
-                print(f"  depositing insulator between layers")
-                deposit_insulator(g, coords, work_z, safe_z, nozzle_size, configFile)
-
-            layer_index += 1
-
-        # end program
-        g.tool_off()
-        g.rapid(x=0, y=0)
-        g.stop()
-
-    print(f"G-code written to {output_file}")
+    # Clean up and end print
+    g.write("\n; --- END PRINT ---")
+    g.write("G28 X0 Y0 ; home X and Y")
+    g.write("M84 ; disable motors")
+        
+    print(f"\nSuccess! G-code saved to {output_file}")
 
 
 if __name__ == "__main__":
-    run()
+    run(enable_extrusion=True)

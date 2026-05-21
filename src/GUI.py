@@ -309,13 +309,15 @@ def generateGcode(fields, output, btn, root):
 
     def run_slicer():
         try:
+            gerber_path = fields["gerberFile"].get()
+            gcode_path = os.path.splitext(gerber_path)[0] + ".gcode"
             slicerSoftware.run(
                 enable_tool_change=fields["toggle_tool_change"].get(),
                 enable_heating=fields["toggle_heating"].get(),
                 enable_camera_sweep=fields["toggle_camera_sweep"].get(),
                 enable_crossover=fields["toggle_crossover"].get(),
                 use_arc_moves=fields["toggle_arc_moves"].get(),
-                enable_extrusion=fields["toggle_extrusion"].get(),
+                
             )
 
             gerber_path = fields["gerberFile"].get()
