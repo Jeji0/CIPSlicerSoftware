@@ -315,6 +315,7 @@ def generateGcode(fields, output, btn, root):
                 enable_camera_sweep=fields["toggle_camera_sweep"].get(),
                 enable_crossover=fields["toggle_crossover"].get(),
                 use_arc_moves=fields["toggle_arc_moves"].get(),
+                enable_extrusion=fields["toggle_extrusion"].get(),
             )
 
             gerber_path = fields["gerberFile"].get()
@@ -460,6 +461,10 @@ def GUI():
     fields["toggle_camera_sweep"] = tk.BooleanVar(value=True)
     fields["toggle_crossover"]    = tk.BooleanVar(value=True)
     fields["toggle_arc_moves"] = tk.BooleanVar(value=False)
+    fields["toggle_extrusion"] = tk.BooleanVar(value=False)
+    tk.Checkbutton(toggle_frame, text="Extrusion (E axis)",
+                   variable=fields["toggle_extrusion"],
+                   font=("Helvetica", 11)).grid(row=1, column=1, sticky="w", padx=(0, 16))
 
     tk.Checkbutton(toggle_frame, text="Use G2 arcs for circles",
                    variable=fields["toggle_arc_moves"],

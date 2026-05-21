@@ -616,8 +616,19 @@ def deposit_insulator(g, coords: list, work_z: float, safe_z: float, nozzle_size
     g.sleep(insulator_cure_seconds)
     g.write("M140 S0")  # turn off heater after cure
 
+def move_with_extrusion(g, x: float, y: float, from_x: float, from_y: float,
+                         current_e: float, multiplier: float, enable_extrusion: bool) -> float:
+    """Write a G1 move with optional E extrusion. Returns updated E value."""
+    if enable_extrusion:
+        dist   = math.sqrt((x - from_x)**2 + (y - from_y)**2)
+        new_e  = current_e + dist * multiplier
+        g.write(f"G1 X{x:.4f} Y{y:.4f} E{new_e:.5f}")
+        return new_e
+    else:
+        g.move(point=(x, y))
+        return current_e
 
-def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, enable_crossover=True, use_arc_moves=False):
+def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, enable_crossover=True, use_arc_moves=False, enable_extrusion=False):
     """Main entry point — loads config, parses Gerber files, generates G-code."""
 
     # load machine and print settings from config.json
@@ -625,6 +636,10 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
         configFile = json.load(f)
 
     validate_config(configFile)
+
+    extrusion_multiplier = configFile.get("extrusionMultiplier", 0.05)
+    retraction_distance  = configFile.get("retractionDistance", 0.5)
+    current_e            = 0.0
 
     # load head profiles
     conductive_head = get_head(configFile, "conductive")
@@ -744,6 +759,10 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
         # home all axes before starting
         g.auto_home()
 
+        if enable_extrusion:
+            g.write("M82 ; absolute extrusion mode")
+            g.write("G92 E0 ; reset E axis")
+
         # lift to safe height and start tool
         g.rapid(z=5)
         g.tool_on("clockwise", 1000)
@@ -818,7 +837,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
             insulator_layer_height = configFile.get("insulatorLayerHeight", 0.2)
             board_thickness     = configFile.get("boardThickness", 0.0)
             print_height_offset = configFile.get("printHeightOffset", 0.5)
-            work_z = board_thickness + print_height_offset + (layer_index * layer_height)
+            #work_z = board_thickness + print_height_offset + (layer_index * layer_height)
+            work_z = 1
             safe_z = work_z + 5
             active_head      = get_head_for_layer(configFile, layer_type)
             tool_number      = get_tool_number(active_head)
@@ -880,12 +900,16 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
                         sx, sy = start_offsets[k]
                         ex, ey = end_offsets[k]
                         if last_end is None or math.dist(last_end, (sx, sy)) > 0.001:
+                            if enable_extrusion:
+                                g.write(f"G1 E{current_e - retraction_distance:.5f}")
                             g.rapid(z=safe_z)
                             g.rapid(point=(sx, sy))
                             g.rapid(z=work_z)
+                            if enable_extrusion:
+                                g.write(f"G1 E{current_e:.5f}")
                         else:
-                            g.move(point=(sx, sy))
-                        g.move(point=(ex, ey))
+                            current_e = move_with_extrusion(g, sx, sy, last_end[0], last_end[1], current_e, extrusion_multiplier, enable_extrusion)
+                        current_e = move_with_extrusion(g, ex, ey, sx, sy, current_e, extrusion_multiplier, enable_extrusion)
                         last_end = (ex, ey)
 
                 # layer 1 cure

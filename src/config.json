@@ -12,8 +12,8 @@
     "printHeightOffset": 0.5,
     "layerMode": "single",
     "printSpeed": 60.0,
-    "gerberFile": "TestFiles/altium-gbr.zip",
-    "gerberJobFile": "TestFiles/altium-job.gbrjob",
+    "gerberFile": "TestFiles/test5-gbr.zip",
+    "gerberJobFile": "TestFiles/test5-job.gbrjob",
     "steps_per_mm_x": 80,
     "steps_per_mm_y": 80,
     "steps_per_mm_z": 400,
@@ -60,5 +60,7 @@
     "cure_dry_temp": 90.0,
     "cure_dry_seconds": 300.0,
     "cure_temp": 170.0,
-    "cure_seconds": 900.0
+    "cure_seconds": 900.0,
+    "extrusionMultiplier": 0.05,
+    "retractionDistance": 0.5
 }
