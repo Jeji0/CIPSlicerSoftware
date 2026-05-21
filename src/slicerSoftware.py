@@ -547,6 +547,79 @@ def move_with_extrusion(g, x: float, y: float, from_x: float, from_y: float,
         g.move(point=(x, y))
         return current_e
 
+def fit_arc_to_points(points, tolerance=0.01):
+    """Try to fit a circle to 3+ points. Returns (cx, cy, r) or None if not circular."""
+    if len(points) < 3:
+        return None
+    # Use first, middle, last points to fit circle
+    p1, p2, p3 = points[0], points[len(points)//2], points[-1]
+    ax, ay = p1; bx, by = p2; cx, cy = p3
+    d = 2 * (ax*(by-cy) + bx*(cy-ay) + cx*(ay-by))
+    if abs(d) < 1e-10:
+        return None  # collinear
+    ux = ((ax**2+ay**2)*(by-cy) + (bx**2+by**2)*(cy-ay) + (cx**2+cy**2)*(ay-by)) / d
+    uy = ((ax**2+ay**2)*(cx-bx) + (bx**2+by**2)*(ax-cx) + (cx**2+cy**2)*(bx-ax)) / d
+    r = math.sqrt((ax-ux)**2 + (ay-uy)**2)
+    if r > 50.0:  # reject arcs larger than 50mm radius
+        return None
+    # check all points lie on circle within tolerance
+    for px, py in points:
+        if abs(math.sqrt((px-ux)**2 + (py-uy)**2) - r) > tolerance:
+            return None
+    return (ux, uy, r)
+
+def points_to_gcode_path(g, path, current_e, extrusion_multiplier, enable_extrusion, use_arc_moves, arc_tolerance=0.002, min_arc_points=5):
+    """Write a Shapely path to G-code, replacing arc segments with G2/G3 where possible."""
+    if not path or len(path) < 2:
+        return current_e
+
+    start_x, start_y = path[0]
+    g.rapid(z=5)
+    g.rapid(point=(start_x, start_y))
+    g.move(z=0.2)
+
+    i = 1
+    while i < len(path):
+        # try to fit arc to increasing window sizes
+        if use_arc_moves:
+            arc_end = i
+            best_arc = None
+            for end in range(i + min_arc_points, min(i + 20, len(path)) + 1):
+                window = [(path[j][0], path[j][1]) for j in range(i-1, end)]
+                result = fit_arc_to_points(window, tolerance=arc_tolerance)
+                if result:
+                    best_arc = (end, result)
+                else:
+                    break  # once fit fails, larger windows won't help
+            if best_arc:
+                end_idx, (cx, cy, r) = best_arc
+                ex, ey = path[end_idx - 1]
+                # determine clockwise or counterclockwise
+                # cross product of first->center and first->end
+                fx, fy = path[i-1]
+                cross = (cx - fx) * (ey - fy) - (cy - fy) * (ex - fx)
+                clockwise = cross > 0
+                arc_cmd = "G2" if clockwise else "G3"
+                ix = cx - fx
+                iy = cy - fy
+                if enable_extrusion:
+                    dist = math.sqrt((ex - fx)**2 + (ey - fy)**2)
+                    current_e += dist * extrusion_multiplier
+                    g.write(f"{arc_cmd} X{ex:.4f} Y{ey:.4f} I{ix:.4f} J{iy:.4f} E{current_e:.5f}")
+                else:
+                    g.write(f"{arc_cmd} X{ex:.4f} Y{ey:.4f} I{ix:.4f} J{iy:.4f}")
+                start_x, start_y = ex, ey
+                i = end_idx
+                continue
+
+        # fallback to G1
+        x, y = path[i]
+        current_e = move_with_extrusion(g, x, y, start_x, start_y, current_e, extrusion_multiplier, enable_extrusion)
+        start_x, start_y = x, y
+        i += 1
+
+    return current_e
+
 def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, enable_crossover=True, use_arc_moves=False, enable_extrusion=False):
     """Main entry point — loads config, parses Gerber files, generates G-code."""
 
@@ -695,13 +768,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
                     for path in layer_toolpaths:
                         if not path or len(path) < 2:
                             continue
-                        start_x, start_y = path[0]
-                        g.rapid(z=5)
-                        g.rapid(point=(start_x, start_y))
-                        g.move(z=0.2)
-                        for x, y in path[1:]:
-                            current_e = move_with_extrusion(g, x, y, start_x, start_y, current_e, extrusion_multiplier, enable_extrusion)
-                            start_x, start_y = x, y
+                        current_e = points_to_gcode_path(g, path, current_e, extrusion_multiplier, enable_extrusion, use_arc_moves)
                         if enable_extrusion:
                             current_e -= retraction_distance
                             g.write(f"G1 E{current_e:.5f} F1800")
@@ -753,4 +820,4 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
 
 
 if __name__ == "__main__":
-    run(enable_extrusion=True)
+    run(enable_extrusion=True, use_arc_moves=True)
