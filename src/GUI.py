@@ -317,7 +317,7 @@ def generateGcode(fields, output, btn, root):
                 enable_camera_sweep=fields["toggle_camera_sweep"].get(),
                 enable_crossover=fields["toggle_crossover"].get(),
                 use_arc_moves=fields["toggle_arc_moves"].get(),
-                
+                enable_extrusion=fields["toggle_extrusion"].get(),
             )
 
             gerber_path = fields["gerberFile"].get()

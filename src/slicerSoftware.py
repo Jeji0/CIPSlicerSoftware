@@ -639,7 +639,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
                 print(f"  skipping {fname} (unknown layer type)")
                 continue
             
-            # Map full filename designation to a simple internal layer type string
             if "copper" in layer_type_full:
                 layer_type = "copper"
             elif "paste" in layer_type_full:
@@ -657,139 +656,99 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
             gbr_path = os.path.join(extract_dir, fname)
             files_to_process.append((gbr_path, layer_type, is_bottom))
 
-
     # --- G-Code Generation Phase ---
-    g = GCodeBuilder(output=output_file)
-    g.write("; --- BEGIN PRINT ---")
-    g.write("G90 ; absolute coordinates")
-    g.write("M82 ; absolute extrusion")
+    with GCodeBuilder(output=output_file) as g:
+        g.write("; --- BEGIN PRINT ---")
+        g.write("G90 ; absolute coordinates")
+        g.write("M82 ; absolute extrusion")
 
-    layer_mode = configFile.get("layerMode", "single")
+        layer_mode = configFile.get("layerMode", "single")
 
-    for gbr_path, layer_type, is_bottom in files_to_process:
-        fname = os.path.basename(gbr_path)
+        for gbr_path, layer_type, is_bottom in files_to_process:
+            fname = os.path.basename(gbr_path)
 
-        # skip non-printable layers
-        if layer_type not in ["copper", "paste", "insulator"]:
-            print(f"  skipping {fname} ({layer_type})")
-            continue
+            if layer_type not in ["copper", "paste", "insulator"]:
+                print(f"  skipping {fname} ({layer_type})")
+                continue
 
-        # in single mode skip bottom layers
-        if layer_mode == "single" and is_bottom:
-            print(f"  skipping {fname} (bottom layer in single mode)")
-            continue
-            
-        print(f"\n--- Processing Layer: {fname} ({layer_type}) ---")
+            if layer_mode == "single" and is_bottom:
+                print(f"  skipping {fname} (bottom layer in single mode)")
+                continue
 
-        if layer_type == "copper":
-            offset_x = 10 
-            offset_y = 10  
-            min_trace_width = conductive_head.get("traceWidth", 0.225)
-            nozzle_size = conductive_head.get("nozzleSize", 0.225)
-            
-            # 1. Extract Data
-            raw_segments, min_x, min_y = extract_traces(
-                gbr_path, offset_x=offset_x, offset_y=offset_y, min_trace_width=min_trace_width
-            )
-            pads, _, _ = extract_coords(gbr_path, offset_x=offset_x, offset_y=offset_y)
+            print(f"\n--- Processing Layer: {fname} ({layer_type}) ---")
 
-            # 2. Process Traces (Shapely)
-            if raw_segments:
-                print(f"  extracted {len(raw_segments)} trace segments")
-                layer_toolpaths = generate_shapely_toolpaths(raw_segments, nozzle_size)
-                
-                for path in layer_toolpaths:
-                    if not path or len(path) < 2: continue
-                    start_x, start_y = path[0]
-                    g.rapid(z=5)
-                    g.rapid(point=(start_x, start_y))
-                    g.move(z=0.2)
-                    for x, y in path[1:]:
-                        current_e = move_with_extrusion(g, x, y, start_x, start_y, current_e, extrusion_multiplier, enable_extrusion)
-                        start_x, start_y = x, y
-                    if enable_extrusion:
-                        current_e -= retraction_distance
-                        g.write(f"G1 E{current_e:.5f} F1800")
+            if layer_type == "copper":
+                offset_x = 10
+                offset_y = 10
+                min_trace_width = conductive_head.get("traceWidth", 0.225)
+                nozzle_size = conductive_head.get("nozzleSize", 0.225)
 
-            # 3. Process Pads
-            if pads:
-                print(f"  extracted {len(pads)} pads")
-                for px, py, size, shape in pads:
-                    if shape == 'C':
-                        # circular pad — use spiral fill
-                        circles = generate_pad_spiral(px, py, size / 2, nozzle_size, use_arc_moves=use_arc_moves)
+                raw_segments, min_x, min_y = extract_traces(
+                    gbr_path, offset_x=offset_x, offset_y=offset_y, min_trace_width=min_trace_width
+                )
+                pads, _, _ = extract_coords(gbr_path, offset_x=offset_x, offset_y=offset_y)
+
+                if raw_segments:
+                    print(f"  extracted {len(raw_segments)} trace segments")
+                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, nozzle_size)
+
+                    for path in layer_toolpaths:
+                        if not path or len(path) < 2:
+                            continue
+                        start_x, start_y = path[0]
                         g.rapid(z=5)
-                        g.rapid(point=(circles[0][0], circles[0][1]))
+                        g.rapid(point=(start_x, start_y))
                         g.move(z=0.2)
-                        last_x, last_y = circles[0][0], circles[0][1]
-                        for cx, cy, new_circle, arc_i, arc_j in circles:
-                            if new_circle:
-                                g.rapid(z=5)
-                                g.rapid(point=(cx, cy))
-                                g.move(z=0.2)
-                            else:
-                                current_e = move_with_extrusion(g, cx, cy, last_x, last_y, current_e, extrusion_multiplier, enable_extrusion)
-                            last_x, last_y = cx, cy
-                        g.rapid(z=5)
-                    else:
-                        # rectangular/roundrect pad — use raster fill
-                        segments = generate_pad_raster(px, py, size, nozzle_size, shape=shape)
-                        if segments:
+                        for x, y in path[1:]:
+                            current_e = move_with_extrusion(g, x, y, start_x, start_y, current_e, extrusion_multiplier, enable_extrusion)
+                            start_x, start_y = x, y
+                        if enable_extrusion:
+                            current_e -= retraction_distance
+                            g.write(f"G1 E{current_e:.5f} F1800")
+
+                if pads:
+                    print(f"  extracted {len(pads)} pads")
+                    for px, py, size, shape in pads:
+                        if shape == 'C':
+                            circles = generate_pad_spiral(px, py, size / 2, nozzle_size, use_arc_moves=use_arc_moves)
                             g.rapid(z=5)
-                            g.rapid(point=(segments[0][0], segments[0][1]))
+                            g.rapid(point=(circles[0][0], circles[0][1]))
                             g.move(z=0.2)
-                            last_x, last_y = segments[0][0], segments[0][1]
-                            for sx, sy, ex, ey in segments:
-                                current_e = move_with_extrusion(g, ex, ey, sx, sy, current_e, extrusion_multiplier, enable_extrusion)
-                                last_x, last_y = ex, ey
+                            last_x, last_y = circles[0][0], circles[0][1]
+                            for cx, cy, new_circle, arc_i, arc_j in circles:
+                                if new_circle:
+                                    g.rapid(z=5)
+                                    g.rapid(point=(cx, cy))
+                                    g.move(z=0.2)
+                                elif use_arc_moves and arc_i != 0:
+                                    g.write(f"G2 X{cx:.4f} Y{cy:.4f} I{arc_i:.4f} J{arc_j:.4f}")
+                                else:
+                                    current_e = move_with_extrusion(g, cx, cy, last_x, last_y, current_e, extrusion_multiplier, enable_extrusion)
+                                last_x, last_y = cx, cy
                             g.rapid(z=5)
+                        else:
+                            segments = generate_pad_raster(px, py, size, nozzle_size, shape=shape)
+                            if segments:
+                                g.rapid(z=5)
+                                g.rapid(point=(segments[0][0], segments[0][1]))
+                                g.move(z=0.2)
+                                last_x, last_y = segments[0][0], segments[0][1]
+                                for sx, sy, ex, ey in segments:
+                                    current_e = move_with_extrusion(g, ex, ey, sx, sy, current_e, extrusion_multiplier, enable_extrusion)
+                                    last_x, last_y = ex, ey
+                                g.rapid(z=5)
 
-            # 2. Generate the continuous, perfectly mitered toolpaths using Shapely
-            nozzle_size = conductive_head.get("nozzleSize", 0.225)
-            layer_toolpaths = generate_shapely_toolpaths(raw_segments, nozzle_size)
-            print(f"  generated {len(layer_toolpaths)} continuous toolpaths")
+            elif layer_type == "paste":
+                pass
 
-            # 3. Write G-code for the generated toolpaths
-            for path in layer_toolpaths:
-                if not path or len(path) < 2:
-                    continue
-                    
-                start_x, start_y = path[0]
-                
-                # Rapid move to the start of the contour
-                g.rapid(z=5) # Safe travel Z
-                g.rapid(point=(start_x, start_y))
-                g.move(z=0.2) # Work Z
-                
-                # Extrude along the contour
-                for x, y in path[1:]:
-                    current_e = move_with_extrusion(
-                        g, x, y, 
-                        from_x=start_x, from_y=start_y, 
-                        current_e=current_e, 
-                        multiplier=extrusion_multiplier, 
-                        enable_extrusion=enable_extrusion
-                    )
-                    start_x, start_y = x, y
-                    
-                # Retract the ink slightly before the tool lifts to prevent stringing
-                if enable_extrusion:
-                    current_e -= retraction_distance
-                    g.write(f"G1 E{current_e:.5f} F1800 ; retract ink")
+            elif layer_type == "insulator":
+                pass
 
-        elif layer_type == "paste":
-            # You can add the specific solder paste execution logic here later
-            pass
-            
-        elif layer_type == "insulator":
-            # You can extract pad coordinates and run deposit_insulator() here later
-            pass
+        # Clean up and end print
+        g.write("\n; --- END PRINT ---")
+        g.write("G28 X0 Y0 ; home X and Y")
+        g.write("M84 ; disable motors")
 
-    # Clean up and end print
-    g.write("\n; --- END PRINT ---")
-    g.write("G28 X0 Y0 ; home X and Y")
-    g.write("M84 ; disable motors")
-        
     print(f"\nSuccess! G-code saved to {output_file}")
 
 
