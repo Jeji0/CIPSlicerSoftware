@@ -755,6 +755,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
         g.write("; --- BEGIN PRINT ---")
         g.write("G90 ; absolute coordinates")
         g.write("M82 ; absolute extrusion")
+        if enable_tool_change:
+            g.write("T0 ; conductive head")
 
         layer_mode = configFile.get("layerMode", "single")
 
@@ -868,7 +870,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
                 pass
 
             elif layer_type == "insulator":
-                pass
+                if enable_tool_change:
+                    g.write("T1 ; insulator head")
 
         # Clean up and end print
         g.write("\n; --- END PRINT ---")
