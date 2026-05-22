@@ -504,11 +504,31 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
         segments.append((points[i][0], points[i][1], points[i+1][0], points[i+1][1]))
     return segments
 
-def camera_sweep(g, safe_z: float, board_size_x: float = 0, board_size_y: float = 0, layer_index: int = 0) -> bool:
+def camera_sweep(g, safe_z: float, board_size_x: float = 0, board_size_y: float = 0,
+                 layer_index: int = 0, camera_head_tool: int = 2,
+                 row_spacing: float = 10.0, column_spacing: float = 10.0,
+                 origin_x: float = 0, origin_y: float = 0) -> bool:
     """Camera sweep after each ink + cure sequence."""
-    g.rapid(z=safe_z)
-    g.rapid(x=0, y=0)
-    print(f"camera sweep layer {layer_index} (placeholder) — board {board_size_x}x{board_size_y}mm")
+    print(f"  camera sweep layer {layer_index} — board {board_size_x:.1f}x{board_size_y:.1f}mm")
+
+    g.write("G28 ; home all axes")
+    g.write(f"T{camera_head_tool} ; camera head")
+    g.write(f"M118 START_LAYER {layer_index}")
+
+    num_rows    = max(1, math.ceil(board_size_y / row_spacing)) + 1
+    num_columns = max(1, math.ceil(board_size_x / column_spacing)) + 1
+
+    for row in range(num_rows):
+        y_pos = origin_y + row * row_spacing
+        for col in range(num_columns):
+            x_pos = origin_x + col * column_spacing
+            g.write(f"G0 X{x_pos:.3f} Y{y_pos:.3f} Z{safe_z:.3f}")
+            g.write("M240 ; camera capture")
+        g.write(f"G0 X{origin_x:.3f} Y{y_pos:.3f} Z{safe_z:.3f}")
+        g.write("M118 NEW_ROW")
+
+    g.write("G28 ; return home after sweep")
+    g.write(f"M118 END_LAYER {layer_index}")
     return True
 
 def deposit_insulator(g, coords: list, work_z: float, safe_z: float, nozzle_size: float, configFile: dict) -> None:
@@ -622,6 +642,7 @@ def points_to_gcode_path(g, path, current_e, extrusion_multiplier, enable_extrus
 
 def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, enable_crossover=True, use_arc_moves=False, enable_extrusion=False):
     """Main entry point — loads config, parses Gerber files, generates G-code."""
+    print("=== NEW SLICER v2 ===")
 
     # load machine and print settings from config.json
     with open(os.path.join(BASE_DIR, "config.json"), "r") as f:
@@ -751,10 +772,12 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
             print(f"\n--- Processing Layer: {fname} ({layer_type}) ---")
 
             if layer_type == "copper":
-                offset_x = 10
-                offset_y = 10
                 min_trace_width = conductive_head.get("traceWidth", 0.225)
                 nozzle_size = conductive_head.get("nozzleSize", 0.225)
+                # find raw Gerber extents to compute correct offset
+                _segs, raw_min_x, raw_min_y = extract_traces(gbr_path, min_trace_width=min_trace_width)
+                offset_x = raw_min_x - (10 + nozzle_size)
+                offset_y = raw_min_y - (10 + nozzle_size)
 
                 raw_segments, min_x, min_y = extract_traces(
                     gbr_path, offset_x=offset_x, offset_y=offset_y, min_trace_width=min_trace_width
@@ -804,6 +827,42 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
                                     current_e = move_with_extrusion(g, ex, ey, sx, sy, current_e, extrusion_multiplier, enable_extrusion)
                                     last_x, last_y = ex, ey
                                 g.rapid(z=5)
+
+                # cure and camera sweep after copper layer
+                if enable_heating:
+                    cure_dry_temp    = conductive_head.get("cureDryTemp", 90)
+                    cure_dry_seconds = conductive_head.get("cureDrySeconds", 300)
+                    cure_temp        = conductive_head.get("cureTemp", 170)
+                    cure_seconds     = conductive_head.get("cureSeconds", 900)
+                    g.write(f"M190 S{cure_dry_temp}")
+                    g.sleep(cure_dry_seconds)
+                    g.write(f"M190 S{cure_temp}")
+                    g.sleep(cure_seconds)
+                    g.write("M140 S0")
+
+                if enable_camera_sweep:
+                    if pads or raw_segments:
+                        all_x = [p[0] for p in pads] + \
+                                [s[0][0] for s in raw_segments] + \
+                                [s[1][0] for s in raw_segments]
+                        all_y = [p[1] for p in pads] + \
+                                [s[0][1] for s in raw_segments] + \
+                                [s[1][1] for s in raw_segments]
+                        sweep_origin_x = min(all_x)
+                        sweep_origin_y = min(all_y)
+                        sweep_size_x = max(all_x) - sweep_origin_x
+                        sweep_size_y = max(all_y) - sweep_origin_y
+                    else:
+                        sweep_origin_x = offset_x
+                        sweep_origin_y = offset_y
+                        sweep_size_x = board_size_x
+                        sweep_size_y = board_size_y
+                    camera_sweep(g, safe_z=5,
+                                 board_size_x=sweep_size_x,
+                                 board_size_y=sweep_size_y,
+                                 layer_index=0,
+                                 origin_x=sweep_origin_x,
+                                 origin_y=sweep_origin_y)
 
             elif layer_type == "paste":
                 pass
