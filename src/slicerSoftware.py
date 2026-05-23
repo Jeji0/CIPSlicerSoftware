@@ -427,11 +427,19 @@ def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None
 
     all_x = [s[0][0] for s in raw_segments] + [s[1][0] for s in raw_segments]
     all_y = [s[0][1] for s in raw_segments] + [s[1][1] for s in raw_segments]
+
     min_x = offset_x if offset_x is not None else min(all_x)
     min_y = offset_y if offset_y is not None else min(all_y)
 
     normalized = [((sx - min_x, sy - min_y), (ex - min_x, ey - min_y), tw)
                   for (sx, sy), (ex, ey), tw in raw_segments]
+    
+    # debug AFTER normalization
+    norm_x = [s[0][0] for s in normalized] + [s[1][0] for s in normalized]
+    norm_y = [s[0][1] for s in normalized] + [s[1][1] for s in normalized]
+    print(f"AFTER NORM min_x={min(norm_x):.4f}, min_y={min(norm_y):.4f}")
+    print(f"AFTER NORM max_x={max(norm_x):.4f}, max_y={max(norm_y):.4f}")
+
     return normalized, min_x, min_y
 
 def generate_pad_spiral(cx: float, cy: float, radius: float, nozzle_size: float, use_arc_moves: bool = False) -> list[tuple[float, float, bool, float, float]]:
@@ -778,8 +786,13 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
                 nozzle_size = conductive_head.get("nozzleSize", 0.225)
                 # find raw Gerber extents to compute correct offset
                 _segs, raw_min_x, raw_min_y = extract_traces(gbr_path, min_trace_width=min_trace_width)
-                offset_x = raw_min_x - (10 + nozzle_size)
-                offset_y = raw_min_y - (10 + nozzle_size)
+                margin = 2.0
+                offset_x = raw_min_x - (margin + nozzle_size)
+                offset_y = raw_min_y - (margin + nozzle_size)
+
+                #test offset
+                print(f"raw_min_x={raw_min_x}, raw_min_y={raw_min_y}")
+                print(f"offset_x={offset_x}, offset_y={offset_y}")
 
                 raw_segments, min_x, min_y = extract_traces(
                     gbr_path, offset_x=offset_x, offset_y=offset_y, min_trace_width=min_trace_width
