@@ -254,6 +254,14 @@ def approximate_arc(x1, y1, x2, y2, i, j, clockwise, segments=16):
     return points
 
 def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None, min_trace_width: float = 0.225):
+    """Extract Gerber D01 trace strokes, including wide circular-aperture strokes.
+
+    Improvements over the original parser:
+      - Supports X-only and Y-only coordinate lines, where the other axis is modal.
+      - Supports modal D01/D02/D03 commands when the D-code is omitted on later lines.
+      - Supports G02/G03 arc strokes with omitted unchanged X/Y and omitted I/J=0.
+      - Does not discard wide traces here; optional width filtering happens in run().
+    """
     gerber_file = GerberFile.from_file(gbr_path)
     source = gerber_file.source_code
     scale = 25.4 if "%MOIN*%" in source else 1.0
@@ -274,91 +282,83 @@ def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None
             aperture_sizes[apt_id] = float(params[0]) * scale
         else:
             aperture_sizes[apt_id] = float(params[0]) * scale if params else 0.225
-    
 
     print(aperture_sizes)
+
+    def parse_axis(line: str, letter: str):
+        m = re.search(rf'{letter}(-?\d+)', line)
+        return int(m.group(1)) / divisor * scale if m else None
 
     raw_segments = []
     current_x = 0.0
     current_y = 0.0
     current_aperture = None
-    arc_mode = None  # 'G02' clockwise, 'G03' counterclockwise
+    arc_mode = None       # 'G02' clockwise, 'G03' counterclockwise
+    modal_draw_cmd = None # 'D01', 'D02', or 'D03'
 
     for line in source.split('\n'):
         line = line.strip()
-        
-        # track arc mode (handles both same-line and separate-line G02/G03)
+        if not line:
+            continue
+
+        # Track interpolation mode. In RS-274X this is modal.
         if 'G02' in line:
             arc_mode = 'G02'
         elif 'G03' in line:
             arc_mode = 'G03'
-        elif 'G01' in line:
+        elif 'G01' in line or 'G1' in line:
             arc_mode = None
 
-        apt_match = re.match(r'D(\d+)\*', line)
+        # Aperture select, e.g. D10*. Do not confuse with D01/D02/D03 moves.
+        apt_match = re.fullmatch(r'D(\d+)\*?', line)
         if apt_match and int(apt_match.group(1)) >= 10:
             current_aperture = apt_match.group(1)
+            continue
+
+        x_val = parse_axis(line, 'X')
+        y_val = parse_axis(line, 'Y')
+        i_val = parse_axis(line, 'I')
+        j_val = parse_axis(line, 'J')
+
+        d_match = re.search(r'D0?([123])(?=\*|$)', line)
+        if d_match:
+            modal_draw_cmd = f"D0{d_match.group(1)}"
+
+        # If this line has coordinates but no explicit D-code, use the modal D-code.
+        cmd = modal_draw_cmd
+
+        has_xy = x_val is not None or y_val is not None
+        has_ij = i_val is not None or j_val is not None
+        if not has_xy and not has_ij:
+            continue
+        if cmd is None:
+            continue
+
+        x = current_x if x_val is None else x_val
+        y = current_y if y_val is None else y_val
+        i = 0.0 if i_val is None else i_val
+        j = 0.0 if j_val is None else j_val
 
         trace_width = max(aperture_sizes.get(current_aperture, min_trace_width), min_trace_width)
 
-        # arc move: G02/G03 may be on same line as coordinates (KiCad format)
-        arc_match = re.match(r'(?:G0[23])?X(-?\d+)Y(-?\d+)I(-?\d+)J(-?\d+)D01', line)
-        if not arc_match:
-            arc_match = re.match(r'X(-?\d+)Y(-?\d+)I(-?\d+)J(-?\d+)D01', line)
-
-        if arc_match:
-            x  = int(arc_match.group(1)) / divisor * scale
-            y  = int(arc_match.group(2)) / divisor * scale
-            i  = int(arc_match.group(3)) / divisor * scale
-            j  = int(arc_match.group(4)) / divisor * scale
-            pts = approximate_arc(current_x, current_y, x, y, i, j, clockwise=(arc_mode == 'G02'))
-            for n in range(len(pts) - 1):
-                raw_segments.append((pts[n], pts[n+1], trace_width))
+        if cmd == 'D02':
             current_x = x
             current_y = y
-            continue
-
-        # arc with only I (no J) or only J (no I)
-        arc_i_match = re.match(r'X(-?\d+)Y(-?\d+)I(-?\d+)D01', line)
-        if arc_i_match:
-            x = int(arc_i_match.group(1)) / divisor * scale
-            y = int(arc_i_match.group(2)) / divisor * scale
-            i = int(arc_i_match.group(3)) / divisor * scale
-            pts = approximate_arc(current_x, current_y, x, y, i, 0, clockwise=(arc_mode == 'G02'))
-            for n in range(len(pts) - 1):
-                raw_segments.append((pts[n], pts[n+1], trace_width))
+        elif cmd == 'D01':
+            if arc_mode in ('G02', 'G03') and has_ij:
+                pts = approximate_arc(current_x, current_y, x, y, i, j, clockwise=(arc_mode == 'G02'))
+                for n in range(len(pts) - 1):
+                    raw_segments.append((pts[n], pts[n+1], trace_width))
+            else:
+                # Normal linear trace. This now also catches X-only and Y-only Gerber lines.
+                if math.dist((current_x, current_y), (x, y)) > 1e-12:
+                    raw_segments.append(((current_x, current_y), (x, y), trace_width))
             current_x = x
             current_y = y
-            continue
-
-        arc_j_match = re.match(r'X(-?\d+)Y(-?\d+)J(-?\d+)D01', line)
-        if arc_j_match:
-            x = int(arc_j_match.group(1)) / divisor * scale
-            y = int(arc_j_match.group(2)) / divisor * scale
-            j = int(arc_j_match.group(3)) / divisor * scale
-            pts = approximate_arc(current_x, current_y, x, y, 0, j, clockwise=(arc_mode == 'G02'))
-            for n in range(len(pts) - 1):
-                raw_segments.append((pts[n], pts[n+1], trace_width))
+        elif cmd == 'D03':
+            # Flash; pads are handled separately by extract_coords().
             current_x = x
             current_y = y
-            continue
-
-        # linear move
-        coord_match = re.match(r'X(-?\d+)Y(-?\d+)(D0[123])', line)
-        if coord_match:
-            x   = int(coord_match.group(1)) / divisor * scale
-            y   = int(coord_match.group(2)) / divisor * scale
-            cmd = coord_match.group(3)
-            if cmd == 'D02':
-                current_x = x
-                current_y = y
-            elif cmd == 'D01':
-                raw_segments.append(((current_x, current_y), (x, y), trace_width))
-                current_x = x
-                current_y = y
-            elif cmd == 'D03':
-                current_x = x
-                current_y = y
 
     if not raw_segments:
         return raw_segments, 0, 0
@@ -451,6 +451,234 @@ def generate_fill_offsets(x: float, y: float, next_x: float, next_y: float, nozz
         oy = max(0, y + perp_y * offset)
         points.append((ox, oy))
     return points
+
+def get_trace_body_mode(configFile: dict) -> str:
+    """Return how wide trace bodies should be deposited.
+
+    Modes:
+      capsule  - draw each Gerber trace segment as continuous racetrack/capsule
+                 loops. For a two-pass trace this becomes line-arc-line-arc.
+                 This is the default because it keeps the cap arcs connected to
+                 the trace lines instead of depositing them later as separate
+                 moves.
+      separate - older behavior: draw each parallel line pass separately. In
+                 this mode traceCapMode can still add separate semicircular caps.
+
+    Config examples:
+      "traceBodyMode": "capsule"
+      "traceBodyMode": "separate"
+    """
+    mode = str(configFile.get("traceBodyMode", configFile.get("traceDrawMode", "capsule"))).strip().lower()
+    aliases = {
+        "": "capsule",
+        "on": "capsule",
+        "true": "capsule",
+        "yes": "capsule",
+        "caps": "capsule",
+        "cap": "capsule",
+        "integrated_caps": "capsule",
+        "integrated": "capsule",
+        "racetrack": "capsule",
+        "old": "separate",
+        "legacy": "separate",
+        "lines": "separate",
+        "line_passes": "separate",
+        "parallel": "separate",
+    }
+    mode = aliases.get(mode, mode)
+    if mode not in {"capsule", "separate"}:
+        print(f"WARNING: unknown traceBodyMode {mode!r}; using 'capsule'")
+        return "capsule"
+    return mode
+
+
+def _trace_pass_offsets(trace_width: float, nozzle_size: float) -> list[float]:
+    """Return the same perpendicular centerline offsets used by generate_fill_offsets()."""
+    passes = calculate_fill_passes(trace_width, nozzle_size)
+    if passes <= 1:
+        return [0.0]
+
+    overlap = (passes * nozzle_size - trace_width) / (passes - 1)
+    spacing = nozzle_size - overlap
+    return [(i - (passes - 1) / 2) * spacing for i in range(passes)]
+
+
+def _bool_config(configFile: dict, key: str, default: bool) -> bool:
+    value = configFile.get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "n", "off", "none", "disabled"}
+    return bool(value)
+
+
+def deposit_trace_capsule_segment(
+    g,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    trace_width: float,
+    nozzle_size: float,
+    work_z: float,
+    safe_z: float,
+    *,
+    arc_code: str = "G2",
+    draw_centerline_for_odd_passes: bool = True,
+) -> None:
+    """Deposit one straight Gerber trace segment as continuous capsule paths.
+
+    For a two-pass trace, the output order is exactly:
+
+        line along +offset side
+        semicircle around the far end
+        line back along -offset side
+        semicircle around the near end
+
+    That creates one continuous racetrack-like centerline path instead of drawing
+    both lines first and adding caps later. Wider traces are made from nested
+    capsule loops. If there is an odd number of fill passes, the remaining center
+    pass is drawn as one straight line because the physical nozzle already gives
+    that single centerline pass round ends.
+    """
+    sx, sy = start
+    ex, ey = end
+    dx = ex - sx
+    dy = ey - sy
+    length = math.sqrt(dx * dx + dy * dy)
+    if length <= 1e-12:
+        return
+
+    ux = dx / length
+    uy = dy / length
+    perp_x = -uy
+    perp_y = ux
+
+    offsets = _trace_pass_offsets(trace_width, nozzle_size)
+    positive_offsets = sorted({abs(o) for o in offsets if abs(o) > 1e-9}, reverse=True)
+    has_centerline = any(abs(o) <= 1e-9 for o in offsets)
+
+    # G2 is the default because, for the path order chosen below, clockwise arcs
+    # naturally travel around the outside of both trace ends.
+    arc_code = arc_code.upper()
+    if arc_code not in {"G2", "G3"}:
+        arc_code = "G2"
+
+    for r in positive_offsets:
+        start_a = (sx + perp_x * r, sy + perp_y * r)
+        end_a   = (ex + perp_x * r, ey + perp_y * r)
+        end_b   = (ex - perp_x * r, ey - perp_y * r)
+        start_b = (sx - perp_x * r, sy - perp_y * r)
+
+        g.rapid(z=safe_z)
+        g.rapid(point=start_a)
+        g.rapid(z=work_z)
+
+        # First side line.
+        g.move(point=end_a)
+
+        # Far-end semicircle, centered on the Gerber end point.
+        g.write(
+            f"{arc_code} "
+            f"X{gcode_float(end_b[0])} "
+            f"Y{gcode_float(end_b[1])} "
+            f"I{gcode_float(ex - end_a[0])} "
+            f"J{gcode_float(ey - end_a[1])}"
+        )
+
+        # Opposite side line, returning toward the start.
+        g.move(point=start_b)
+
+        # Near-end semicircle, centered on the Gerber start point.
+        g.write(
+            f"{arc_code} "
+            f"X{gcode_float(start_a[0])} "
+            f"Y{gcode_float(start_a[1])} "
+            f"I{gcode_float(sx - start_b[0])} "
+            f"J{gcode_float(sy - start_b[1])}"
+        )
+
+    if has_centerline and draw_centerline_for_odd_passes:
+        g.rapid(z=safe_z)
+        g.rapid(point=start)
+        g.rapid(z=work_z)
+        g.move(point=end)
+
+    g.rapid(z=safe_z)
+
+
+def deposit_trace_line_passes(
+    g,
+    traces: list[tuple[tuple[float, float], tuple[float, float], float]],
+    nozzle_size: float,
+    work_z: float,
+    safe_z: float,
+    travel_tolerance: float = 0.001,
+) -> None:
+    """Older trace-body behavior: draw each offset line pass separately."""
+    last_end = None
+    for (x, y), (nx, ny), seg_width in traces:
+        seg_passes = calculate_fill_passes(seg_width, nozzle_size)
+        start_offsets = generate_fill_offsets(x, y, nx, ny, nozzle_size, seg_passes, trace_width=seg_width)
+        end_offsets   = list(reversed(generate_fill_offsets(nx, ny, x, y, nozzle_size, seg_passes, trace_width=seg_width)))
+        for k in range(seg_passes):
+            sx, sy = start_offsets[k]
+            ex, ey = end_offsets[k]
+            if last_end is None or math.dist(last_end, (sx, sy)) > travel_tolerance:
+                g.rapid(z=safe_z)
+                g.rapid(point=(sx, sy))
+                g.rapid(z=work_z)
+            else:
+                g.move(point=(sx, sy))
+            g.move(point=(ex, ey))
+            last_end = (ex, ey)
+
+
+def deposit_trace_segment_list(
+    g,
+    traces: list[tuple[tuple[float, float], tuple[float, float], float]],
+    nozzle_size: float,
+    work_z: float,
+    safe_z: float,
+    configFile: dict,
+    *,
+    label: str = "trace",
+) -> str:
+    """Deposit trace segments using either integrated capsule paths or separate line passes.
+
+    Returns the active mode so the caller knows whether separate cap deposition
+    should be skipped. In capsule mode, caps are already part of the trace body.
+    """
+    mode = get_trace_body_mode(configFile)
+    if not traces:
+        return mode
+
+    if mode == "capsule":
+        arc_code = str(configFile.get("traceCapsuleArcCode", "G2")).strip().upper()
+        centerline = _bool_config(configFile, "traceCapsuleDrawCenterline", True)
+        print(f"  depositing {len(traces)} {label} segment(s) as integrated capsule paths ({arc_code})")
+        for start, end, seg_width in traces:
+            deposit_trace_capsule_segment(
+                g,
+                start,
+                end,
+                trace_width=seg_width,
+                nozzle_size=nozzle_size,
+                work_z=work_z,
+                safe_z=safe_z,
+                arc_code=arc_code,
+                draw_centerline_for_odd_passes=centerline,
+            )
+    else:
+        travel_tolerance = float(configFile.get("traceTravelTolerance", 0.001))
+        print(f"  depositing {len(traces)} {label} segment(s) as separate line passes")
+        deposit_trace_line_passes(
+            g,
+            traces,
+            nozzle_size=nozzle_size,
+            work_z=work_z,
+            safe_z=safe_z,
+            travel_tolerance=travel_tolerance,
+        )
+
+    return mode
+
 
 def generate_pad_spiral(cx: float, cy: float, radius: float, nozzle_size: float) -> list[tuple[float, float, bool]]:
     """Fill a circular pad with concentric circles from center outward.
@@ -1030,12 +1258,31 @@ def run():
                 print(f"  pad[{i}]: ({x:.3f},{y:.3f}) size={s:.4f} shape={sh}")
             _nozzle_size = get_head_for_layer(configFile, layer_type).get("nozzleSize", 0.225)
             traces, _, _ = extract_traces(gbr_path, offset_x=global_min_x, offset_y=global_min_y, min_trace_width=_nozzle_size)
-            traces = [(s, e, tw) for s, e, tw in traces]
+
+            # Previous code silently discarded any trace wider than 1.0 mm.
+            # That made valid wide Gerber traces disappear. Leave wide traces enabled
+            # by default, and only filter them if config.json explicitly asks for it.
+            max_trace_width = configFile.get("maxTraceWidth", None)
+            if max_trace_width is not None:
+                max_trace_width = float(max_trace_width)
+                before_filter = len(traces)
+                traces = [(s, e, tw) for s, e, tw in traces if tw <= max_trace_width]
+                removed = before_filter - len(traces)
+                if removed:
+                    print(f"  filtered out {removed} trace segment(s) wider than {max_trace_width:.3f}mm")
+
+            if traces:
+                widths = sorted({round(tw, 4) for _, _, tw in traces})
+                shown = widths[:12]
+                suffix = "..." if len(widths) > len(shown) else ""
+                print(f"  trace widths detected: {shown}{suffix}")
         
 
-            if not coords:
-                print(f"  no pads found in {fname}, skipping")
+            if not coords and not traces:
+                print(f"  no pads or traces found in {fname}, skipping")
                 continue
+            if not coords:
+                print(f"  no pads found in {fname}; continuing with trace-only layer")
 
             out_of_bounds = [(x, y) for x, y, s, sh in coords if x > board_size_x or y > board_size_y]
             if out_of_bounds:
@@ -1047,7 +1294,12 @@ def run():
 
             # mirror bottom layer coordinates on X axis
             if is_bottom:
-                board_max_x = max(x for x, y, s, sh in coords)
+                if coords:
+                    board_max_x = max(x for x, y, s, sh in coords)
+                elif traces:
+                    board_max_x = max(max(sx, ex) for (sx, sy), (ex, ey), tw in traces)
+                else:
+                    board_max_x = 0
                 coords  = [(board_max_x - x, y, s, sh) for x, y, s, sh in coords]
                 traces  = [((board_max_x - sx, sy), (board_max_x - ex, ey), tw) for (sx, sy), (ex, ey), tw in traces]
 
@@ -1071,9 +1323,14 @@ def run():
             trace_cap_mode    = get_trace_cap_mode(configFile)
             trace_cap_tolerance = float(configFile.get("traceCapTolerance", 0.001))
             trace_cap_extra_radius = float(configFile.get("traceCapExtraRadius", 0.0))
+            trace_body_mode   = get_trace_body_mode(configFile)
             print(f"  processing {fname} ({layer_type}) — {len(coords)} pads — Z depth: {work_z:.2f}mm")
             print(f"  circular pads will use {pad_arc_code} full-circle arcs")
-            print(f"  trace caps mode: {trace_cap_mode}")
+            print(f"  trace body mode: {trace_body_mode}")
+            if trace_body_mode != "capsule":
+                print(f"  trace caps mode: {trace_cap_mode}")
+            else:
+                print("  trace caps are integrated into each trace path")
 
             # deposit ink on each pad using raster fill based on aperture size
             for px, py, pad_size, pad_shape in coords:
@@ -1111,26 +1368,21 @@ def run():
                 crossings = find_trace_intersections(traces)
                 print(f"  processing {len(traces)} trace segments — {fill_passes} fill pass(es) — {len(crossings)} crossings")
 
-                # layer 1: deposit all traces, minimize Z lifts between connected segments
-                print(f"  depositing {len(traces)} trace segments")
-                last_end = None
-                for (x, y), (nx, ny), seg_width in traces:
-                    seg_passes = calculate_fill_passes(seg_width, nozzle_size)
-                    start_offsets = generate_fill_offsets(x, y, nx, ny, nozzle_size, seg_passes, trace_width=seg_width)
-                    end_offsets   = list(reversed(generate_fill_offsets(nx, ny, x, y, nozzle_size, seg_passes, trace_width=seg_width)))
-                    for k in range(seg_passes):
-                        sx, sy = start_offsets[k]
-                        ex, ey = end_offsets[k]
-                        if last_end is None or math.dist(last_end, (sx, sy)) > 0.001:
-                            g.rapid(z=safe_z)
-                            g.rapid(point=(sx, sy))
-                            g.rapid(z=work_z)
-                        else:
-                            g.move(point=(sx, sy))
-                        g.move(point=(ex, ey))
-                        last_end = (ex, ey)
+                # layer 1: deposit all traces. In capsule mode each trace segment is
+                # one continuous path, e.g. line-arc-line-arc for a two-pass trace.
+                active_trace_body_mode = deposit_trace_segment_list(
+                    g,
+                    traces,
+                    nozzle_size=nozzle_size,
+                    work_z=work_z,
+                    safe_z=safe_z,
+                    configFile=configFile,
+                    label="trace",
+                )
 
-                if trace_cap_mode != "none":
+                # Only use the older separate-cap pass when the trace body itself
+                # is not already being drawn as integrated capsule paths.
+                if trace_cap_mode != "none" and active_trace_body_mode != "capsule":
                     trace_caps = collect_trace_caps(traces, mode=trace_cap_mode, tolerance=trace_cap_tolerance)
                     print(f"  depositing {len(trace_caps)} semicircular trace cap(s) — mode: {trace_cap_mode}")
                     for cap_x, cap_y, interior_x, interior_y, cap_width in trace_caps:
@@ -1194,21 +1446,18 @@ def run():
                     # layer 5: conductive over-traces
                     g.write(f"T{tool_number}")
                     print(f"  redrawing over-traces at Z{over_work_z:.2f}")
-                    for idx in over_segs:
-                        (x, y), (nx, ny), seg_width = traces[idx]
-                        seg_passes = calculate_fill_passes(seg_width, nozzle_size)
-                        start_offsets = generate_fill_offsets(x, y, nx, ny, nozzle_size, seg_passes, trace_width=seg_width)
-                        end_offsets   = list(reversed(generate_fill_offsets(nx, ny, x, y, nozzle_size, seg_passes, trace_width=seg_width)))
-                        for k in range(seg_passes):
-                            sx, sy = start_offsets[k]
-                            ex, ey = end_offsets[k]
-                            g.rapid(z=over_safe_z)
-                            g.rapid(point=(sx, sy))
-                            g.rapid(z=over_work_z)
-                            g.move(point=(ex, ey))
+                    over_trace_list = [traces[idx] for idx in over_segs]
+                    active_over_trace_body_mode = deposit_trace_segment_list(
+                        g,
+                        over_trace_list,
+                        nozzle_size=nozzle_size,
+                        work_z=over_work_z,
+                        safe_z=over_safe_z,
+                        configFile=configFile,
+                        label="over-trace",
+                    )
 
-                    if trace_cap_mode != "none" and over_segs:
-                        over_trace_list = [traces[idx] for idx in over_segs]
+                    if trace_cap_mode != "none" and over_segs and active_over_trace_body_mode != "capsule":
                         over_trace_caps = collect_trace_caps(over_trace_list, mode=trace_cap_mode, tolerance=trace_cap_tolerance)
                         print(f"  depositing {len(over_trace_caps)} semicircular over-trace cap(s) — mode: {trace_cap_mode}")
                         for cap_x, cap_y, interior_x, interior_y, cap_width in over_trace_caps:
