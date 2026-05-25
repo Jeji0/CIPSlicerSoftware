@@ -1,12 +1,3 @@
-G92 X0 Y0 Z0 ; Set axis position
-G21 ; Set length units, millimeters
-G90 ; Set distance mode, absolute
-F600
-G28  ; Auto-home axes
-G0 Z5
-S1000 M03 ; Start tool, clockwise
-G04 P1 ; Sleep for a while, seconds
-T0
 G0 Z5.5
 G0 X58.584 Y22.6226
 G0 Z0.5
@@ -2537,13 +2528,5 @@ G0 Z5.5
 G0 X39.2633 Y96.2826
 G0 Z0.5
 G1 X39.2633 Y103.0646
-M190 S90
-G04 P300 ; Sleep for a while, seconds
-M190 S170
-G04 P900 ; Sleep for a while, seconds
-M140 S0
 G0 Z5.5
 G0 X0 Y0
-M05 ; Stop tool
-G0 X0 Y0
-M02 ; End of program, no reset
