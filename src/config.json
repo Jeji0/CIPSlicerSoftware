@@ -58,5 +58,6 @@
     "cure_dry_temp": 90.0,
     "cure_dry_seconds": 300.0,
     "cure_temp": 170.0,
-    "cure_seconds": 900.0
+    "cure_seconds": 900.0,
+    "traceCapMode": "all"
 }

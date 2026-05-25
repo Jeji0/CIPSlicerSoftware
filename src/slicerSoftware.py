@@ -568,6 +568,200 @@ def deposit_circular_pad_arcs(
 
     g.rapid(z=safe_z)
 
+
+def get_trace_cap_mode(configFile: dict) -> str:
+    """Return how semicircular trace caps should be added to trace endpoints.
+
+    Modes:
+      terminal  - cap only open trace ends, where a trace endpoint is not shared
+                  by another trace segment. This is the default and is usually
+                  the closest match to Gerber circular-aperture stroke ends.
+      all       - cap every unique segment endpoint, including corners/junctions.
+                  For joined points, the widest segment's direction is used.
+      segment   - cap both ends of every segment without de-duplication. Mostly
+                  useful for testing and usually heavier than needed.
+      none      - disable trace caps.
+
+    Backwards/simple option:
+      "traceCapsEnabled": false  -> same as traceCapMode "none"
+    """
+    if "traceCapMode" not in configFile:
+        enabled = configFile.get("traceCapsEnabled", True)
+        if isinstance(enabled, str):
+            enabled = enabled.strip().lower() not in {"0", "false", "no", "n", "off", "none"}
+        return "terminal" if bool(enabled) else "none"
+
+    mode = str(configFile.get("traceCapMode", "terminal")).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "": "terminal",
+        "on": "terminal",
+        "true": "terminal",
+        "yes": "terminal",
+        "end": "terminal",
+        "ends": "terminal",
+        "open_ends": "terminal",
+        "terminal_endpoints": "terminal",
+        "terminals": "terminal",
+        "unique": "all",
+        "all_unique": "all",
+        "all_endpoints": "all",
+        "every_endpoint": "all",
+        "per_segment": "segment",
+        "segments": "segment",
+        "segment_endpoints": "segment",
+        "off": "none",
+        "false": "none",
+        "no": "none",
+        "0": "none",
+        "disabled": "none",
+    }
+    mode = aliases.get(mode, mode)
+    if mode not in {"terminal", "all", "segment", "none"}:
+        print(f"WARNING: unknown traceCapMode {mode!r}; using 'terminal'")
+        return "terminal"
+    return mode
+
+
+def _point_key(x: float, y: float, tolerance: float) -> tuple[int, int]:
+    """Quantize a point so nearly identical Gerber endpoints de-duplicate."""
+    tolerance = max(float(tolerance), 1e-9)
+    return (round(x / tolerance), round(y / tolerance))
+
+
+def collect_trace_caps(
+    traces: list[tuple[tuple[float, float], tuple[float, float], float]],
+    mode: str = "terminal",
+    tolerance: float = 0.001,
+) -> list[tuple[float, float, float, float, float]]:
+    """Collect trace-end cap definitions.
+
+    Returns a list of:
+        (cap_x, cap_y, interior_x, interior_y, trace_width)
+
+    cap_x/cap_y are the Gerber trace endpoint. interior_x/interior_y is a point
+    along the trace body, used to determine which side of the endpoint should
+    receive the semicircular cap. This is what lets the cap be a half circle on
+    the outside end of the trace instead of a full circular pad.
+    """
+    mode = str(mode).strip().lower()
+    if mode == "none" or not traces:
+        return []
+
+    if mode == "segment":
+        caps = []
+        for (sx, sy), (ex, ey), width in traces:
+            caps.append((sx, sy, ex, ey, width))
+            caps.append((ex, ey, sx, sy, width))
+        return caps
+
+    grouped: dict[tuple[int, int], list[tuple[float, float, float, float, float]]] = {}
+    for (sx, sy), (ex, ey), width in traces:
+        grouped.setdefault(_point_key(sx, sy, tolerance), []).append((sx, sy, ex, ey, width))
+        grouped.setdefault(_point_key(ex, ey, tolerance), []).append((ex, ey, sx, sy, width))
+
+    caps = []
+    for entries in grouped.values():
+        if mode == "terminal" and len(entries) != 1:
+            continue
+
+        # For "all" mode, use the widest segment at that endpoint. This avoids
+        # piling several caps on top of each other at a junction, while still
+        # giving a deterministic outside direction.
+        cap_x, cap_y, interior_x, interior_y, width = max(entries, key=lambda item: item[4])
+        if mode == "all":
+            count = len(entries)
+            cap_x = sum(item[0] for item in entries) / count
+            cap_y = sum(item[1] for item in entries) / count
+        caps.append((cap_x, cap_y, interior_x, interior_y, width))
+    return caps
+
+
+def generate_trace_cap_centerline_radii(trace_width: float, nozzle_size: float, extra_radius: float = 0.0) -> list[float]:
+    """Return centerline radii for semicircular trace caps.
+
+    The previous circular-cap approach used trace_width / 2 as a pad radius,
+    which creates a full circular pad. For a filled trace made from parallel
+    offset line passes, the semicircular cap should instead connect the same
+    positive/negative offset passes at each end of the trace.
+
+    Example: if the trace body is filled with offsets -0.18, 0, +0.18, this
+    returns [0.18], so the cap is one semicircle from +0.18 to -0.18. Wider
+    traces get multiple concentric semicircles, matching the existing fill-pass
+    spacing.
+    """
+    if trace_width <= 0 or nozzle_size <= 0:
+        return []
+
+    passes = calculate_fill_passes(trace_width, nozzle_size)
+    if passes <= 1:
+        # A single nozzle-centerline trace already has a round physical end from
+        # the nozzle/ink itself, so there is no separate centerline semicircle to add.
+        return []
+
+    overlap = (passes * nozzle_size - trace_width) / (passes - 1)
+    spacing = nozzle_size - overlap
+
+    radii = sorted({
+        round(abs((i - (passes - 1) / 2) * spacing) + float(extra_radius), 9)
+        for i in range(passes)
+        if abs((i - (passes - 1) / 2) * spacing) > 1e-9
+    })
+    return [r for r in radii if r > 0]
+
+
+def deposit_trace_cap(
+    g,
+    cx: float,
+    cy: float,
+    interior_x: float,
+    interior_y: float,
+    trace_width: float,
+    nozzle_size: float,
+    work_z: float,
+    safe_z: float,
+    clockwise: bool = False,  # kept for call compatibility; cap side determines G2/G3 choice
+    extra_radius: float = 0.0,
+) -> None:
+    """Deposit a semicircular cap at one trace endpoint.
+
+    The cap is centered on the Gerber endpoint and lies only on the outside end
+    of the trace. It uses the same centerline offset spacing as the trace body,
+    so it meets the offset trace passes instead of creating a full circular pad.
+    """
+    dx = interior_x - cx
+    dy = interior_y - cy
+    length = math.sqrt(dx * dx + dy * dy)
+    if length <= 1e-9:
+        return
+
+    # Unit vector into the trace body and its left-hand perpendicular.
+    ux = dx / length
+    uy = dy / length
+    perp_x = -uy
+    perp_y = ux
+
+    for r in generate_trace_cap_centerline_radii(trace_width, nozzle_size, extra_radius):
+        start_x = cx + perp_x * r
+        start_y = cy + perp_y * r
+        end_x   = cx - perp_x * r
+        end_y   = cy - perp_y * r
+
+        # From +perp to -perp, G3 goes around the outside of the endpoint because
+        # the interior direction points into the trace body.
+        g.rapid(z=safe_z)
+        g.rapid(point=(start_x, start_y))
+        g.rapid(z=work_z)
+        g.write(
+            f"G3 "
+            f"X{gcode_float(end_x)} "
+            f"Y{gcode_float(end_y)} "
+            f"I{gcode_float(cx - start_x)} "
+            f"J{gcode_float(cy - start_y)}"
+        )
+
+    g.rapid(z=safe_z)
+
+
 def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
     """Fill rectangular pad with a single continuous rectangular spiral from outside inward."""
     if shape.startswith('RR:'):
@@ -836,7 +1030,7 @@ def run():
                 print(f"  pad[{i}]: ({x:.3f},{y:.3f}) size={s:.4f} shape={sh}")
             _nozzle_size = get_head_for_layer(configFile, layer_type).get("nozzleSize", 0.225)
             traces, _, _ = extract_traces(gbr_path, offset_x=global_min_x, offset_y=global_min_y, min_trace_width=_nozzle_size)
-            traces = [(s, e, tw) for s, e, tw in traces if tw <= 1.0]
+            traces = [(s, e, tw) for s, e, tw in traces]
         
 
             if not coords:
@@ -874,8 +1068,12 @@ def run():
             fill_passes      = calculate_fill_passes(trace_width, nozzle_size)
             pad_arc_clockwise = get_pad_arc_clockwise(configFile)
             pad_arc_code      = "G2" if pad_arc_clockwise else "G3"
+            trace_cap_mode    = get_trace_cap_mode(configFile)
+            trace_cap_tolerance = float(configFile.get("traceCapTolerance", 0.001))
+            trace_cap_extra_radius = float(configFile.get("traceCapExtraRadius", 0.0))
             print(f"  processing {fname} ({layer_type}) — {len(coords)} pads — Z depth: {work_z:.2f}mm")
             print(f"  circular pads will use {pad_arc_code} full-circle arcs")
+            print(f"  trace caps mode: {trace_cap_mode}")
 
             # deposit ink on each pad using raster fill based on aperture size
             for px, py, pad_size, pad_shape in coords:
@@ -931,6 +1129,24 @@ def run():
                             g.move(point=(sx, sy))
                         g.move(point=(ex, ey))
                         last_end = (ex, ey)
+
+                if trace_cap_mode != "none":
+                    trace_caps = collect_trace_caps(traces, mode=trace_cap_mode, tolerance=trace_cap_tolerance)
+                    print(f"  depositing {len(trace_caps)} semicircular trace cap(s) — mode: {trace_cap_mode}")
+                    for cap_x, cap_y, interior_x, interior_y, cap_width in trace_caps:
+                        deposit_trace_cap(
+                            g,
+                            cx=cap_x,
+                            cy=cap_y,
+                            interior_x=interior_x,
+                            interior_y=interior_y,
+                            trace_width=cap_width,
+                            nozzle_size=nozzle_size,
+                            work_z=work_z,
+                            safe_z=safe_z,
+                            clockwise=pad_arc_clockwise,
+                            extra_radius=trace_cap_extra_radius,
+                        )
 
                 # layer 1 cure
                 if layer_type == "copper":
@@ -990,6 +1206,25 @@ def run():
                             g.rapid(point=(sx, sy))
                             g.rapid(z=over_work_z)
                             g.move(point=(ex, ey))
+
+                    if trace_cap_mode != "none" and over_segs:
+                        over_trace_list = [traces[idx] for idx in over_segs]
+                        over_trace_caps = collect_trace_caps(over_trace_list, mode=trace_cap_mode, tolerance=trace_cap_tolerance)
+                        print(f"  depositing {len(over_trace_caps)} semicircular over-trace cap(s) — mode: {trace_cap_mode}")
+                        for cap_x, cap_y, interior_x, interior_y, cap_width in over_trace_caps:
+                            deposit_trace_cap(
+                                g,
+                                cx=cap_x,
+                                cy=cap_y,
+                                interior_x=interior_x,
+                                interior_y=interior_y,
+                                trace_width=cap_width,
+                                nozzle_size=nozzle_size,
+                                work_z=over_work_z,
+                                safe_z=over_safe_z,
+                                clockwise=pad_arc_clockwise,
+                                extra_radius=trace_cap_extra_radius,
+                            )
 
                     # layer 5 cure
                     if layer_type == "copper":
