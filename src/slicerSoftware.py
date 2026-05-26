@@ -593,6 +593,27 @@ def fit_arc_to_points(points, tolerance=0.01):
     for px, py in points:
         if abs(math.sqrt((px-ux)**2 + (py-uy)**2) - r) > tolerance:
             return None
+    # FIX: reject arcs that are effectively straight lines.
+    # Compute the sagitta (max perpendicular deviation of any point from the
+    # chord between the first and last points). If it's smaller than the
+    # tolerance the segment is straight — a large-radius arc fit on nearly-
+    # collinear Shapely vertices is the root cause of straight traces being
+    # rendered as curves in NC Viewer.
+    ex, ey = points[-1]
+    chord_len = math.sqrt((ex - ax)**2 + (ey - ay)**2)
+    if chord_len < 1e-10:
+        return None
+    max_sag = 0.0
+    for px, py in points:
+        # perpendicular distance from point to the chord line (ax,ay)->(ex,ey)
+        sag = abs((ey - ay) * px - (ex - ax) * py + ex * ay - ey * ax) / chord_len
+        if sag > max_sag:
+            max_sag = sag
+    # Scale the straightness threshold by chord length — longer segments accumulate
+    # more absolute floating-point sagitta from Shapely's vertex wobble.
+    straight_threshold = max(tolerance, chord_len * 0.005)
+    if max_sag < straight_threshold:
+        return None  # segment is straight, let G1 handle it
     return (ux, uy, r)
 
 def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_width, enable_extrusion, use_arc_moves, arc_tolerance=0.002, min_arc_points=5):
@@ -609,7 +630,6 @@ def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_widt
     while i < len(path):
         # try to fit arc to increasing window sizes
         if use_arc_moves:
-            arc_end = i
             best_arc = None
             for end in range(i + min_arc_points, min(i + 20, len(path)) + 1):
                 window = [(path[j][0], path[j][1]) for j in range(i-1, end)]
@@ -621,9 +641,9 @@ def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_widt
             if best_arc:
                 end_idx, (cx, cy, r) = best_arc
                 ex, ey = path[end_idx - 1]
-                # determine clockwise or counterclockwise
-                # cross product of first->center and first->end
-                fx, fy = path[i-1]
+                # FIX: use tracked position (start_x, start_y) as the arc start,
+                # not path[i-1] which diverges after arc index jumps (end_idx skips ahead).
+                fx, fy = start_x, start_y
                 cross = (cx - fx) * (ey - fy) - (cy - fy) * (ex - fx)
                 clockwise = cross > 0
                 arc_cmd = "G2" if clockwise else "G3"
@@ -819,17 +839,24 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
                             g.rapid(z=5)
                             g.rapid(point=(circles[0][0], circles[0][1]))
                             g.move(z=0.2)
+                            # FIX: initialise last_x/last_y from the actual rapid destination,
+                            # not recalculated later — consistent with how the loop uses them.
                             last_x, last_y = circles[0][0], circles[0][1]
                             for cx, cy, new_circle, arc_i, arc_j in circles:
                                 if new_circle:
                                     g.rapid(z=5)
                                     g.rapid(point=(cx, cy))
                                     g.move(z=0.2)
+                                    # FIX: sync tracked position after every rapid so the
+                                    # next move_with_extrusion computes distance from the
+                                    # correct origin, not the previous circle's last point.
+                                    last_x, last_y = cx, cy
                                 elif use_arc_moves and arc_i != 0:
                                     g.write(f"G2 X{cx:.4f} Y{cy:.4f} I{arc_i:.4f} J{arc_j:.4f}")
+                                    last_x, last_y = cx, cy
                                 else:
                                     current_e = move_with_extrusion(g, cx, cy, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
-                                last_x, last_y = cx, cy
+                                    last_x, last_y = cx, cy
                             g.rapid(z=5)
                         else:
                             segments = generate_pad_raster(px, py, size, nozzle_size, shape=shape)
@@ -939,11 +966,15 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True, 
                                     g.rapid(z=5)
                                     g.rapid(point=(cx, cy))
                                     g.move(z=0.2)
+                                    # FIX: sync tracked position after every rapid (same fix
+                                    # as copper pad spiral above).
+                                    last_x, last_y = cx, cy
                                 elif use_arc_moves and arc_i != 0:
                                     g.write(f"G2 X{cx:.4f} Y{cy:.4f} I{arc_i:.4f} J{arc_j:.4f}")
+                                    last_x, last_y = cx, cy
                                 else:
                                     current_e = move_with_extrusion(g, cx, cy, last_x, last_y, current_e, ins_flow_rate, ins_layer_height, ins_trace_width, enable_extrusion)
-                                last_x, last_y = cx, cy
+                                    last_x, last_y = cx, cy
                             g.rapid(z=5)
                         else:
                             segments = generate_pad_raster(px, py, size, ins_nozzle_size, shape=shape)
