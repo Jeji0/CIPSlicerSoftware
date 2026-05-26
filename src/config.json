@@ -31,7 +31,10 @@
             "cureDryTemp": 90,
             "cureDrySeconds": 300,
             "cureTemp": 170,
-            "cureSeconds": 900
+            "cureSeconds": 900,
+            "flowRate": 0.05,
+            "layerHeight": 0.2,
+            "flowScaleByWidth": true
         },
         {
             "id": "si3104",
@@ -43,7 +46,10 @@
             "cureTemp": 135,
             "cureSeconds": 600,
             "offsetX": 0,
-            "offsetY": 0
+            "offsetY": 0,
+            "flowRate": 0.04,
+            "layerHeight": 0.2,
+            "flowScaleByWidth": true
         },
         {
             "id": "paste",
@@ -51,8 +57,15 @@
             "type": "paste",
             "toolNumber": 2,
             "nozzleSize": 0.3,
+            "dwellFactor": 0.5,
             "cureTemp": 0,
             "cureSeconds": 0
+        },
+        {
+            "id": "camera",
+            "name": "Camera Head",
+            "type": "camera",
+            "toolNumber": 3
         }
     ],
     "nozzleSize": 0.225,
@@ -61,6 +74,5 @@
     "cure_dry_seconds": 300.0,
     "cure_temp": 170.0,
     "cure_seconds": 900.0,
-    "extrusionMultiplier": 0.05,
     "retractionDistance": 0.5
 }
