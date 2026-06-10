@@ -749,6 +749,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     copper_work_z    = configFile.get("copperWorkZ", 0.2)
     insulator_work_z = configFile.get("insulatorWorkZ", 0.4)
     crossover_work_z = configFile.get("crossoverWorkZ", 0.6)
+    print_feed_rate = configFile.get("printFeedRate", 3600)
 
     camera_head        = get_head(configFile, "camera")
     camera_tool_number = camera_head.get("toolNumber", 3)
@@ -868,8 +869,12 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     # --- G-Code Generation Phase ---
     with GCodeBuilder(output=output_file) as g:
         g.write("; --- BEGIN PRINT ---")
+        g.write("G21 ; set units to millimeters")
         g.write("G90 ; absolute coordinates")
         g.write("M82 ; absolute extrusion")
+        g.write("G28 ; home all axes")
+        g.write("G92 E0 ; reset E axis")
+        g.write(f"F{print_feed_rate} ; set print feed rate")
         if enable_tool_change:
             g.write("T0 ; conductive head")
 

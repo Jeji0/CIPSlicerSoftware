@@ -57,6 +57,9 @@ def load_config_into_fields(fields):
         fields["cureSeconds"].delete(0, tk.END)
         fields["cureSeconds"].insert(0, config.get("cure_seconds", 900))
 
+        fields["printFeedRate"].delete(0, tk.END)
+        fields["printFeedRate"].insert(0, config.get("printFeedRate", 3600))
+
         fields["gerberFile"].delete(0, tk.END)
         fields["gerberFile"].insert(0, config.get("gerberFile", ""))
 
@@ -145,6 +148,7 @@ def save_settings(fields, output):
             "cure_seconds": float(fields["cureSeconds"].get()),
             "gerberFile": fields["gerberFile"].get(),
             "gerberJobFile": fields["gerberJobFile"].get(),
+            "printFeedRate": float(fields["printFeedRate"].get()),
             "activeHeads": [fields["activeHead"].get()]
         }
         cF.updConf(updates)
@@ -356,7 +360,7 @@ def validate_fields(fields):
     numeric_fields = [
         "layerHeight", "printSpeed", "bedX", "bedY", "bedZ",
         "nozzleSize", "traceWidth", "cureDryTemp", "cureDrySeconds",
-        "cureTemp", "cureSeconds"
+        "cureTemp", "cureSeconds", "printFeedRate"
     ]
 
     for key in numeric_fields:
@@ -425,14 +429,15 @@ def GUI():
     make_field_row(right, 3, "Dry time (s)", "cureDrySeconds", fields)
     make_field_row(right, 4, "Cure temp (°C)", "cureTemp", fields)
     make_field_row(right, 5, "Cure time (s)", "cureSeconds", fields)
+    make_field_row(right, 6, "Feed rate (mm/min)", "printFeedRate", fields)
 
     # Heads dropdown menu
     tk.Label(right, text="Active head", anchor="w",
-             font=("Helvetica", 11)).grid(row=6, column=0, sticky="w", pady=3)
+             font=("Helvetica", 11)).grid(row=7, column=0, sticky="w", pady=3)
     fields["activeHead"] = tk.StringVar(value="conductor3")
     fields["activeHeadMenu"] = tk.OptionMenu(right, fields["activeHead"], "conductor3")
     fields["activeHeadMenu"].config(font=("Helvetica", 11), width=10)
-    fields["activeHeadMenu"].grid(row=6, column=1, sticky="e", pady=3)
+    fields["activeHeadMenu"].grid(row=7, column=1, sticky="e", pady=3)
 
     # ── GERBER FILE ROW ──
     file_frame = tk.LabelFrame(root, text="Gerber file",
