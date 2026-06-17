@@ -552,7 +552,7 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
     else:
         return []
 
-    step   = nozzle_size * 0.8
+    step   = nozzle_size * 1.5
     half_w = width / 2
     half_h = height / 2
     points = []
@@ -569,15 +569,20 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
         if w == 0 and h == 0:
             break
 
+        if layer > 0 and (w < step / 2 or h < step / 2):
+            break
+
         if layer == 0:
-            points.append((cx - w, cy + h))
+            points.append((cx - w, cy + h))   # start top-left
 
         if h > 0:
-            points.append((cx + w, cy + h))
-            points.append((cx + w, cy - h))
-            points.append((cx - w, cy - h))
-            points.append((cx - w, cy + next_h))
-            points.append((cx - next_w, cy + next_h))
+            points.append((cx + w, cy + h))   # top-right
+            points.append((cx + w, cy - h))   # bottom-right
+            points.append((cx - w, cy - h))   # bottom-left
+            points.append((cx - w, cy + h))   # close back to top-left
+            if next_w >= step / 2 and next_h >= step / 2:
+                points.append((cx - w, cy + next_h))
+                points.append((cx - next_w, cy + next_h))
         else:
             points.append((cx + w, cy))
             points.append((cx + next_w, cy))
@@ -732,6 +737,23 @@ def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_widt
 
     return current_e
 
+def prime_lead_screw(g, lift_z=5.5, extrude_amount=40, extrude_feed=200,
+                     prime_cycles=20, cycle_delay_ms=2500, settle_ms=10000):
+    """
+    Prime the lead screw at startup — lifts Z, pushes piston down to seat
+    against ink, then runs repeated mini-extrudes to prep for dispensing.
+    """
+    print("Priming lead screw...")
+    g.write(f"G0 Z{lift_z} F20000 ; lift Z for lead screw engagement")
+    g.write(f"G1 E{extrude_amount} F{extrude_feed} ; initial piston seat")
+
+    for i in range(prime_cycles):
+        g.write(f"G1 E{extrude_amount} F{extrude_feed} ; prime cycle {i + 1}/{prime_cycles}")
+        g.write(f"G4 P{cycle_delay_ms} ; wait {cycle_delay_ms}ms")
+
+    g.write(f"G4 P{settle_ms} ; settle wait")
+    print("Lead screw primed")
+
 def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
         enable_crossover=True, use_arc_moves=False, enable_extrusion=False):
     """Main entry point — loads config, parses Gerber files, generates G-code."""
@@ -877,6 +899,9 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
         g.write(f"F{print_feed_rate} ; set print feed rate")
         if enable_tool_change:
             g.write("T0 ; conductive head")
+
+        # ── PRIME LEAD SCREW ──────────────────────────────────
+        prime_lead_screw(g)
 
         layer_mode = configFile.get("layerMode", "single")
 
