@@ -37,10 +37,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Note: Conductor 3 — no burnishing needed, no flipping needed
 # Note: insulator cover type determines if stop is at layer 3.5 or 4
 
-def generate_shapely_toolpaths(raw_segments, nozzle_size, stepover_ratio=0.85):
+def generate_shapely_toolpaths(raw_segments, nozzle_size, pads=None, stepover_ratio=0.85):
     """
     Merges overlapping trace segments and generates concentric fill paths.
     raw_segments: list of ((start_x, start_y), (end_x, end_y), trace_width)
+    pads: optional list of (x, y, size, shape) to subtract from trace geometry
     Returns a list of continuous paths (each path is a list of (x,y) tuples).
     """
     if not raw_segments:
@@ -53,6 +54,32 @@ def generate_shapely_toolpaths(raw_segments, nozzle_size, stepover_ratio=0.85):
         trace_polys.append(poly)
 
     merged_layer = unary_union(trace_polys)
+
+    # subtract pad areas so traces stop flush at pad boundaries
+    if pads:
+        from shapely.geometry import Point
+        pad_polys = []
+        shrink = nozzle_size / 2  # pull back by half nozzle so toolpath meets pad edge flush
+        for x, y, size, shape in pads:
+            if shape == 'C':
+                pad_polys.append(Point(x, y).buffer(max(0, size / 2 - shrink)))
+            elif shape.startswith('RR:'):
+                height = float(shape.split(':')[1])
+                pad_polys.append(Polygon([
+                    (x - size/2 + shrink, y - height/2 + shrink),
+                    (x + size/2 - shrink, y - height/2 + shrink),
+                    (x + size/2 - shrink, y + height/2 - shrink),
+                    (x - size/2 + shrink, y + height/2 - shrink)
+                ]))
+            elif shape == 'R':
+                pad_polys.append(Polygon([
+                    (x - size/2 + shrink, y - size/2 + shrink),
+                    (x + size/2 - shrink, y - size/2 + shrink),
+                    (x + size/2 - shrink, y + size/2 - shrink),
+                    (x - size/2 + shrink, y + size/2 - shrink)
+                ]))
+        if pad_polys:
+            merged_layer = merged_layer.difference(unary_union(pad_polys))
 
     toolpaths = []
     current_inset = nozzle_size / 2.0
@@ -541,7 +568,7 @@ def generate_pad_spiral(cx: float, cy: float, radius: float, nozzle_size: float,
     return points
 
 def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
-    """Fill pad (Rectangle or Circle) with a continuous spiral."""
+    """Fill pad with concentric rectangles, returned as separate paths."""
 
     if shape.startswith('RR:'):
         width  = size
@@ -555,7 +582,7 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
     step   = nozzle_size * 1.5
     half_w = width / 2
     half_h = height / 2
-    points = []
+    all_rects = []
 
     num_layers = math.ceil(max(half_w, half_h) / step) + 1
 
@@ -563,35 +590,24 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
         w = max(half_w - layer * step, 0)
         h = max(half_h - layer * step, 0)
 
-        next_w = max(half_w - (layer + 1) * step, 0)
-        next_h = max(half_h - (layer + 1) * step, 0)
-
         if w == 0 and h == 0:
             break
-
         if layer > 0 and (w < step / 2 or h < step / 2):
             break
 
-        if layer == 0:
-            points.append((cx - w, cy + h))   # start top-left
+        rect_points = [
+            (cx - w, cy + h),
+            (cx + w, cy + h),
+            (cx + w, cy - h),
+            (cx - w, cy - h),
+            (cx - w, cy + h),
+        ]
+        segments = [(rect_points[i][0], rect_points[i][1],
+                     rect_points[i+1][0], rect_points[i+1][1])
+                    for i in range(len(rect_points) - 1)]
+        all_rects.append(segments)
 
-        if h > 0:
-            points.append((cx + w, cy + h))   # top-right
-            points.append((cx + w, cy - h))   # bottom-right
-            points.append((cx - w, cy - h))   # bottom-left
-            points.append((cx - w, cy + h))   # close back to top-left
-            if next_w >= step / 2 and next_h >= step / 2:
-                points.append((cx - w, cy + next_h))
-                points.append((cx - next_w, cy + next_h))
-        else:
-            points.append((cx + w, cy))
-            points.append((cx + next_w, cy))
-            break
-
-    segments = []
-    for i in range(len(points) - 1):
-        segments.append((points[i][0], points[i][1], points[i+1][0], points[i+1][1]))
-    return segments
+    return all_rects
 
 def camera_sweep(g, safe_z: float, board_size_x: float = 0, board_size_y: float = 0,
                  layer_index: int = 0, camera_head_tool: int = 3,
@@ -932,7 +948,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
                 if raw_segments:
                     print(f"  extracted {len(raw_segments)} trace segments")
-                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, nozzle_size)
+                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, nozzle_size, pads=pads)
                     for path in layer_toolpaths:
                         if not path or len(path) < 2:
                             continue
@@ -968,14 +984,16 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                     last_x, last_y = cx, cy
                             g.rapid(z=5)
                         else:
-                            segments = generate_pad_raster(px, py, size, nozzle_size, shape=shape)
-                            if segments:
+                            all_rects = generate_pad_raster(px, py, size, nozzle_size, shape=shape)
+                            for rect_segments in all_rects:
+                                if not rect_segments:
+                                    continue
                                 g.rapid(z=5)
-                                g.rapid(point=(segments[0][0], segments[0][1]))
+                                g.rapid(point=(rect_segments[0][0], rect_segments[0][1]))
                                 g.move(z=copper_work_z)
-                                last_x, last_y = segments[0][0], segments[0][1]
-                                for sx, sy, ex, ey in segments:
-                                    current_e = move_with_extrusion(g, ex, ey, sx, sy, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
+                                last_x, last_y = rect_segments[0][0], rect_segments[0][1]
+                                for sx, sy, ex, ey in rect_segments:
+                                    current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey
                                 g.rapid(z=5)
 
@@ -1047,7 +1065,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
                 if raw_segments:
                     print(f"  extracted {len(raw_segments)} insulator trace segments")
-                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, ins_nozzle_size)
+                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, ins_nozzle_size, pads=pads)
                     for path in layer_toolpaths:
                         if not path or len(path) < 2:
                             continue
@@ -1083,14 +1101,16 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                     last_x, last_y = cx, cy
                             g.rapid(z=5)
                         else:
-                            segments = generate_pad_raster(px, py, size, ins_nozzle_size, shape=shape)
-                            if segments:
+                            all_rects = generate_pad_raster(px, py, size, ins_nozzle_size, shape=shape)
+                            for rect_segments in all_rects:
+                                if not rect_segments:
+                                    continue
                                 g.rapid(z=5)
-                                g.rapid(point=(segments[0][0], segments[0][1]))
+                                g.rapid(point=(rect_segments[0][0], rect_segments[0][1]))
                                 g.move(z=insulator_work_z)
-                                last_x, last_y = segments[0][0], segments[0][1]
-                                for sx, sy, ex, ey in segments:
-                                    current_e = move_with_extrusion(g, ex, ey, sx, sy, current_e, ins_flow_rate, ins_layer_height, ins_trace_width, enable_extrusion)
+                                last_x, last_y = rect_segments[0][0], rect_segments[0][1]
+                                for sx, sy, ex, ey in rect_segments:
+                                    current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, ins_flow_rate, ins_layer_height, ins_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey
                                 g.rapid(z=5)
 
@@ -1138,7 +1158,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
                 if raw_segments:
                     print(f"  extracted {len(raw_segments)} crossover trace segments")
-                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, nozzle_size)
+                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, nozzle_size, pads=pads)
                     for path in layer_toolpaths:
                         if not path or len(path) < 2:
                             continue
@@ -1171,14 +1191,16 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                     last_x, last_y = cx, cy
                             g.rapid(z=5)
                         else:
-                            segments = generate_pad_raster(px, py, size, nozzle_size, shape=shape)
-                            if segments:
+                            all_rects = generate_pad_raster(px, py, size, nozzle_size, shape=shape)
+                            for rect_segments in all_rects:
+                                if not rect_segments:
+                                    continue
                                 g.rapid(z=5)
-                                g.rapid(point=(segments[0][0], segments[0][1]))
+                                g.rapid(point=(rect_segments[0][0], rect_segments[0][1]))
                                 g.move(z=crossover_work_z)
-                                last_x, last_y = segments[0][0], segments[0][1]
-                                for sx, sy, ex, ey in segments:
-                                    current_e = move_with_extrusion(g, ex, ey, sx, sy, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
+                                last_x, last_y = rect_segments[0][0], rect_segments[0][1]
+                                for sx, sy, ex, ey in rect_segments:
+                                    current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey
                                 g.rapid(z=5)
 
