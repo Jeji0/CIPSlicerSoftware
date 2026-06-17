@@ -42,9 +42,6 @@ def load_config_into_fields(fields):
         fields["nozzleSize"].delete(0, tk.END)
         fields["nozzleSize"].insert(0, config.get("nozzleSize", 0.225))
 
-        fields["traceWidth"].delete(0, tk.END)
-        fields["traceWidth"].insert(0, config.get("traceWidth", 0.25))
-
         fields["cureDryTemp"].delete(0, tk.END)
         fields["cureDryTemp"].insert(0, config.get("cure_dry_temp", 90))
 
@@ -106,9 +103,6 @@ def on_head_change(fields, head_id):
         fields["nozzleSize"].delete(0, tk.END)
         fields["nozzleSize"].insert(0, head.get("nozzleSize", 0.225))
 
-        fields["traceWidth"].delete(0, tk.END)
-        fields["traceWidth"].insert(0, head.get("traceWidth", fields["traceWidth"].get()))
-
         fields["cureDryTemp"].delete(0, tk.END)
         fields["cureDryTemp"].insert(0, head.get("cureDryTemp", 90))
 
@@ -141,7 +135,6 @@ def save_settings(fields, output):
             ],
             "layerMode": fields["layerMode"].get(),
             "nozzleSize": float(fields["nozzleSize"].get()),
-            "traceWidth": float(fields["traceWidth"].get()),
             "cure_dry_temp": float(fields["cureDryTemp"].get()),
             "cure_dry_seconds": float(fields["cureDrySeconds"].get()),
             "cure_temp": float(fields["cureTemp"].get()),
@@ -359,7 +352,7 @@ def validate_fields(fields):
     valid = True
     numeric_fields = [
         "layerHeight", "printSpeed", "bedX", "bedY", "bedZ",
-        "nozzleSize", "traceWidth", "cureDryTemp", "cureDrySeconds",
+        "nozzleSize", "cureDryTemp", "cureDrySeconds",
         "cureTemp", "cureSeconds", "printFeedRate"
     ]
 
@@ -424,12 +417,11 @@ def GUI():
     right.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=10)
 
     make_field_row(right, 0, "Nozzle size (mm)", "nozzleSize", fields)
-    make_field_row(right, 1, "Trace width (mm)", "traceWidth", fields)
-    make_field_row(right, 2, "Dry temp (°C)", "cureDryTemp", fields)
-    make_field_row(right, 3, "Dry time (s)", "cureDrySeconds", fields)
-    make_field_row(right, 4, "Cure temp (°C)", "cureTemp", fields)
-    make_field_row(right, 5, "Cure time (s)", "cureSeconds", fields)
-    make_field_row(right, 6, "Feed rate (mm/min)", "printFeedRate", fields)
+    make_field_row(right, 1, "Dry temp (°C)", "cureDryTemp", fields)
+    make_field_row(right, 2, "Dry time (s)", "cureDrySeconds", fields)
+    make_field_row(right, 3, "Cure temp (°C)", "cureTemp", fields)
+    make_field_row(right, 4, "Cure time (s)", "cureSeconds", fields)
+    make_field_row(right, 5, "Feed rate (mm/min)", "printFeedRate", fields)
 
     # Heads dropdown menu
     tk.Label(right, text="Active head", anchor="w",
