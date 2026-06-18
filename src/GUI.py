@@ -315,6 +315,7 @@ def generateGcode(fields, output, btn, root):
                 enable_crossover=fields["toggle_crossover"].get(),
                 use_arc_moves=fields["toggle_arc_moves"].get(),
                 enable_extrusion=fields["toggle_extrusion"].get(),
+                enable_purge=fields["toggle_purge"].get(),
             )
 
             gerber_path = fields["gerberFile"].get()
@@ -461,6 +462,10 @@ def GUI():
     fields["toggle_crossover"]    = tk.BooleanVar(value=True)
     fields["toggle_arc_moves"] = tk.BooleanVar(value=False)
     fields["toggle_extrusion"] = tk.BooleanVar(value=False)
+    fields["toggle_purge"] = tk.BooleanVar(value=True)
+    tk.Checkbutton(toggle_frame, text="Purge",
+                   variable=fields["toggle_purge"],
+                   font=("Helvetica", 11)).grid(row=1, column=2, sticky="w", padx=(0, 16))
     tk.Checkbutton(toggle_frame, text="Extrusion (E axis)",
                    variable=fields["toggle_extrusion"],
                    font=("Helvetica", 11)).grid(row=1, column=1, sticky="w", padx=(0, 16))

@@ -771,7 +771,7 @@ def prime_lead_screw(g, lift_z=5.5, extrude_amount=40, extrude_feed=200,
     print("Lead screw primed")
 
 def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
-        enable_crossover=True, use_arc_moves=False, enable_extrusion=False):
+        enable_crossover=True, use_arc_moves=False, enable_extrusion=False, enable_purge=True):
     """Main entry point — loads config, parses Gerber files, generates G-code."""
     print("=== NEW SLICER v2 ===")
 
@@ -917,7 +917,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
             g.write("T0 ; conductive head")
 
         # ── PRIME LEAD SCREW ──────────────────────────────────
-        prime_lead_screw(g)
+        if enable_purge:
+            prime_lead_screw(g)
 
         layer_mode = configFile.get("layerMode", "single")
 
@@ -1142,6 +1143,9 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                      origin_y=sweep_origin_y)
 
             elif layer_type == "copper_crossover":
+                if not enable_crossover:
+                    print(f"  skipping {fname} (crossover disabled)")
+                    continue
                 min_trace_width = conductive_head.get("traceWidth", 0.225)
                 nozzle_size     = conductive_head.get("nozzleSize", 0.225)
                 flow_rate       = conductive_head.get("flowRate", 0.05)
