@@ -580,8 +580,9 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
         return []
 
     step   = nozzle_size * 1.5
-    half_w = width / 2
-    half_h = height / 2
+    inset  = nozzle_size / 2  # pull first pass in so bead edge meets true pad boundary
+    half_w = max(width / 2 - inset, 0)
+    half_h = max(height / 2 - inset, 0)
     all_rects = []
 
     num_layers = math.ceil(max(half_w, half_h) / step) + 1
