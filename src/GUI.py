@@ -418,19 +418,25 @@ def GUI():
     right.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=10)
 
     make_field_row(right, 0, "Nozzle size (mm)", "nozzleSize", fields)
-    make_field_row(right, 1, "Dry temp (°C)", "cureDryTemp", fields)
-    make_field_row(right, 2, "Dry time (s)", "cureDrySeconds", fields)
-    make_field_row(right, 3, "Cure temp (°C)", "cureTemp", fields)
-    make_field_row(right, 4, "Cure time (s)", "cureSeconds", fields)
-    make_field_row(right, 5, "Feed rate (mm/min)", "printFeedRate", fields)
+
+    tk.Label(right, text="⚠ Nozzle size must not exceed your trace width",
+              font=("Helvetica", 9, "italic"), fg="#cc6600",
+              anchor="w", wraplength=220, justify="left").grid(
+        row=1, column=0, columnspan=2, sticky="w", pady=(0, 4))
+
+    make_field_row(right, 2, "Dry temp (°C)", "cureDryTemp", fields)
+    make_field_row(right, 3, "Dry time (s)", "cureDrySeconds", fields)
+    make_field_row(right, 4, "Cure temp (°C)", "cureTemp", fields)
+    make_field_row(right, 5, "Cure time (s)", "cureSeconds", fields)
+    make_field_row(right, 6, "Feed rate (mm/min)", "printFeedRate", fields)
 
     # Heads dropdown menu
     tk.Label(right, text="Active head", anchor="w",
-             font=("Helvetica", 11)).grid(row=7, column=0, sticky="w", pady=3)
+             font=("Helvetica", 11)).grid(row=8, column=0, sticky="w", pady=3)
     fields["activeHead"] = tk.StringVar(value="conductor3")
     fields["activeHeadMenu"] = tk.OptionMenu(right, fields["activeHead"], "conductor3")
     fields["activeHeadMenu"].config(font=("Helvetica", 11), width=10)
-    fields["activeHeadMenu"].grid(row=7, column=1, sticky="e", pady=3)
+    fields["activeHeadMenu"].grid(row=8, column=1, sticky="e", pady=3)
 
     # ── GERBER FILE ROW ──
     file_frame = tk.LabelFrame(root, text="Gerber file",
