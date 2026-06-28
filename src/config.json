@@ -22,7 +22,11 @@
     "steps_per_mm_y": 80,
     "steps_per_mm_z": 400,
     "activeHeads": [
-        "conductor3"
+        "conductor3",
+        "si3104",
+        "paste",
+        "camera",
+        "nc/pen"
     ],
     "heads": [
         {
@@ -72,8 +76,8 @@
             "toolNumber": 2
         },
         {
-            "id": "NC/Pen",
-            "name": "NC/Pen",
+            "id": "nc/pen",
+            "name": "NC/Pen Head",
             "type": "nc/pen",
             "toolNumber": 3
         }
