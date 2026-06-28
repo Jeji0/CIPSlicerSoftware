@@ -44,7 +44,7 @@
             "id": "si3104",
             "name": "ACI SI3104 Insulator",
             "type": "insulator",
-            "toolNumber": 1,
+            "toolNumber": 4,
             "nozzleSize": 0.225,
             "traceWidth": 0.225,
             "cureTemp": 135,
@@ -59,7 +59,7 @@
             "id": "paste",
             "name": "Solder Paste",
             "type": "paste",
-            "toolNumber": 2,
+            "toolNumber": 1,
             "nozzleSize": 0.3,
             "dwellFactor": 0.5,
             "cureTemp": 0,
@@ -69,6 +69,12 @@
             "id": "camera",
             "name": "Camera Head",
             "type": "camera",
+            "toolNumber": 2
+        },
+        {
+            "id": "NC/Pen",
+            "name": "NC/Pen",
+            "type": "nc/pen",
             "toolNumber": 3
         }
     ],
