@@ -1008,7 +1008,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     g.sleep(cure_dry_seconds)
                     g.write(f"M190 S{cure_temp}")
                     g.sleep(cure_seconds)
-                    g.write("M190 S30")
+                    g.write("M190 S0")
 
                 if enable_camera_sweep:
                     if pads or raw_segments:
@@ -1121,7 +1121,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     ins_cure_seconds = insulator_head.get("cureSeconds", 600)
                     g.write(f"M190 S{ins_cure_temp}")
                     g.sleep(ins_cure_seconds)
-                    g.write("M190 S30")
+                    g.write("M190 S0")
 
                 if enable_camera_sweep:
                     if pads or raw_segments:
@@ -1214,7 +1214,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     g.sleep(conductive_head.get("cureDrySeconds", 300))
                     g.write(f"M190 S{conductive_head.get('cureTemp', 170)}")
                     g.sleep(conductive_head.get("cureSeconds", 900))
-                    g.write("M190 S30")
+                    g.write("M190 S0")
 
                 if enable_camera_sweep:
                     if pads or raw_segments:
