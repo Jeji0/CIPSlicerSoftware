@@ -1009,7 +1009,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                 for sx, sy, ex, ey in rect_segments:
                                     current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey
-                g.rapid(z=100, y=-10)
+                g.rapid(z=100, y=-40)
                 if enable_heating:
                     cure_dry_temp    = conductive_head.get("cureDryTemp", 90)
                     cure_dry_seconds = conductive_head.get("cureDrySeconds", 300)
@@ -1131,7 +1131,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                 for sx, sy, ex, ey in rect_segments:
                                     current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, ins_flow_rate, ins_layer_height, ins_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey                
-                g.rapid(z=100, y=-10)
+                g.rapid(z=100, y=-40)
                 if enable_heating:
                     ins_cure_temp    = insulator_head.get("cureTemp", 135)
                     ins_cure_seconds = insulator_head.get("cureSeconds", 600)
@@ -1227,7 +1227,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                 for sx, sy, ex, ey in rect_segments:
                                     current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey
-                g.rapid(z=100, y=-10)
+                g.rapid(z=100, y=-40)
                 if enable_heating:
                     g.write(f"M190 S{conductive_head.get('cureDryTemp', 90)}")
                     g.sleep(conductive_head.get("cureDrySeconds", 300))
