@@ -8,25 +8,26 @@
     "layerHeight": 0.2,
     "conductiveLayerHeight": 0.2,
     "insulatorLayerHeight": 0.2,
-    "copperWorkZ": 0.2,
+    "copperWorkZ": 7,
     "insulatorWorkZ": 0.4,
     "crossoverWorkZ": 0.6,
+    "pasteWorkZ": 10,
     "boardThickness": 0,
     "printHeightOffset": 0.5,
     "layerMode": "single",
     "printSpeed": 60.0,
     "printFeedRate": 3600.0,
-    "gerberFile": "TestFiles/test4b-gbr.zip",
-    "gerberJobFile": "TestFiles/test4b-job.gbrjob",
+    "gerberFile": "TestFiles/test6b-gbr.zip",
+    "gerberJobFile": "TestFiles/test6b-job.gbrjob",
     "steps_per_mm_x": 80,
     "steps_per_mm_y": 80,
     "steps_per_mm_z": 400,
+    "pullpush": 2.0,
+    "pullpush_speed": 500,
+    "paste_pullpush": 1.0,
+    "paste_pullpush_speed": 300,
     "activeHeads": [
-        "conductor3",
-        "si3104",
-        "paste",
-        "camera",
-        "nc/pen"
+        "conductor3"
     ],
     "heads": [
         {
@@ -82,7 +83,7 @@
             "toolNumber": 3
         }
     ],
-    "nozzleSize": 0.225,
+    "nozzleSize": 0.35,
     "traceWidth": 0.25,
     "cure_dry_temp": 90.0,
     "cure_dry_seconds": 300.0,

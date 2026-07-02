@@ -759,7 +759,7 @@ def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_widt
     return current_e
 
 def prime_lead_screw(g, lift_z=5.5, extrude_amount=40, extrude_feed=200,
-                     prime_cycles=20, cycle_delay_ms=2.5, settle_ms=10):
+                     prime_cycles=20, cycle_delay_s=2.5, settle_s=10):
     """
     Prime the lead screw at startup — lifts Z, pushes piston down to seat
     against ink, then runs repeated mini-extrudes to prep for dispensing.
@@ -770,9 +770,9 @@ def prime_lead_screw(g, lift_z=5.5, extrude_amount=40, extrude_feed=200,
 
     for i in range(prime_cycles):
         g.write(f"G1 E{extrude_amount} F{extrude_feed} ; prime cycle {i + 1}/{prime_cycles}")
-        g.write(f"G4 P{cycle_delay_ms} ; wait {cycle_delay_ms}ms")
+        g.write(f"G4 S{cycle_delay_s} ; wait {cycle_delay_s}s")
 
-    g.write(f"G4 P{settle_ms} ; settle wait")
+    g.write(f"G4 S{settle_s} ; settle wait")
     print("Lead screw primed")
 
 def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
@@ -796,6 +796,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     copper_work_z    = configFile.get("copperWorkZ", 0.2)
     insulator_work_z = configFile.get("insulatorWorkZ", 0.4)
     crossover_work_z = configFile.get("crossoverWorkZ", 0.6)
+    paste_work_z     = configFile.get("pasteWorkZ", 0.1)
     print_feed_rate = configFile.get("printFeedRate", 3600)
 
     camera_head        = get_head(configFile, "camera")
@@ -1058,7 +1059,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     g.move(e=-paste_pullpush, f=paste_pullpush_speed)
                     g.rapid(z=5)
                     g.rapid(point=(px, py))
-                    g.rapid(z=copper_work_z)
+                    g.rapid(z=paste_work_z)
                     g.move(e=paste_pullpush, f=paste_pullpush_speed)
                     g.write(f"G4 P{dwell_ms} ; dispense paste")
                     g.rapid(z=5)
