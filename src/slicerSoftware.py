@@ -707,7 +707,7 @@ def fit_arc_to_points(points, tolerance=0.01):
 
 def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_width,
                           enable_extrusion, use_arc_moves, arc_tolerance=0.002,
-                          min_arc_points=5, work_z=0.2, pullpush=0.0, pullpush_speed=500):
+                          min_arc_points=5, work_z=0.2, pullpush=60.0, pullpush_speed=200):
     """Write a Shapely path to G-code, replacing arc segments with G2/G3 where possible."""
     if not path or len(path) < 2:
         return current_e
@@ -786,10 +786,10 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     validate_config(configFile)
 
     retraction_distance = configFile.get("retractionDistance", 0.5)
-    global_pullpush       = configFile.get("pullpush", 2.0)
-    global_pullpush_speed = configFile.get("pullpush_speed", 500)
-    paste_pullpush          = configFile.get("paste_pullpush", 1.0)
-    paste_pullpush_speed    = configFile.get("paste_pullpush_speed", 300)
+    global_pullpush       = configFile.get("pullpush", 60)
+    global_pullpush_speed = configFile.get("pullpush_speed", 200)
+    paste_pullpush          = configFile.get("paste_pullpush", 60)
+    paste_pullpush_speed    = configFile.get("paste_pullpush_speed", 200)
     current_e           = 0.0
 
     # Z heights for each layer — configurable, with sensible defaults
