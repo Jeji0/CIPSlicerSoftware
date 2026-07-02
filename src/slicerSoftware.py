@@ -653,7 +653,7 @@ def deposit_insulator(g, coords: list, work_z: float, safe_z: float, nozzle_size
         ox = max(0, x + offset_x)
         oy = max(0, y + offset_y)
         g.rapid(point=(ox, oy))
-        g.move(z=work_z)
+        g.rapid(z=work_z)
         g.rapid(z=safe_z)
 
     print(f"  insulator cure: 135C for {insulator_cure_seconds}s")
@@ -707,15 +707,19 @@ def fit_arc_to_points(points, tolerance=0.01):
 
 def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_width,
                           enable_extrusion, use_arc_moves, arc_tolerance=0.002,
-                          min_arc_points=5, work_z=0.2):
+                          min_arc_points=5, work_z=0.2, pullpush=0.0, pullpush_speed=500):
     """Write a Shapely path to G-code, replacing arc segments with G2/G3 where possible."""
     if not path or len(path) < 2:
         return current_e
 
     start_x, start_y = path[0]
+    if pullpush > 0:
+        g.move(e=-pullpush, f=pullpush_speed)
     g.rapid(z=5)
     g.rapid(point=(start_x, start_y))
-    g.move(z=work_z)
+    g.rapid(z=work_z)
+    if pullpush > 0:
+        g.move(e=pullpush, f=pullpush_speed)
 
     i = 1
     while i < len(path):
@@ -782,6 +786,10 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     validate_config(configFile)
 
     retraction_distance = configFile.get("retractionDistance", 0.5)
+    global_pullpush       = configFile.get("pullpush", 2.0)
+    global_pullpush_speed = configFile.get("pullpush_speed", 500)
+    paste_pullpush          = configFile.get("paste_pullpush", 1.0)
+    paste_pullpush_speed    = configFile.get("paste_pullpush_speed", 300)
     current_e           = 0.0
 
     # Z heights for each layer — configurable, with sensible defaults
@@ -957,7 +965,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         current_e = points_to_gcode_path(
                             g, path, current_e, flow_rate, layer_height,
                             min_trace_width, enable_extrusion, use_arc_moves,
-                            work_z=copper_work_z
+                            work_z=copper_work_z, pullpush=global_pullpush, pullpush_speed=global_pullpush_speed
                         )
                         if enable_extrusion:
                             current_e -= retraction_distance
@@ -970,13 +978,15 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                             circles = generate_pad_spiral(px, py, size / 2, nozzle_size, use_arc_moves=use_arc_moves)
                             g.rapid(z=5)
                             g.rapid(point=(circles[0][0], circles[0][1]))
-                            g.move(z=copper_work_z)
+                            g.rapid(z=copper_work_z)
                             last_x, last_y = circles[0][0], circles[0][1]
                             for cx, cy, new_circle, arc_i, arc_j in circles:
                                 if new_circle:
+                                    g.move(e=-global_pullpush, f=global_pullpush_speed)
                                     g.rapid(z=5)
                                     g.rapid(point=(cx, cy))
-                                    g.move(z=copper_work_z)
+                                    g.rapid(z=copper_work_z)
+                                    g.move(e=global_pullpush, f=global_pullpush_speed)
                                     last_x, last_y = cx, cy
                                 elif use_arc_moves and arc_i != 0:
                                     g.write(f"G2 X{cx:.4f} Y{cy:.4f} I{arc_i:.4f} J{arc_j:.4f}")
@@ -990,15 +1000,16 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                             for rect_segments in all_rects:
                                 if not rect_segments:
                                     continue
+                                g.move(e=-global_pullpush, f=global_pullpush_speed)
                                 g.rapid(z=5)
                                 g.rapid(point=(rect_segments[0][0], rect_segments[0][1]))
-                                g.move(z=copper_work_z)
+                                g.rapid(z=copper_work_z)
+                                g.move(e=global_pullpush, f=global_pullpush_speed)
                                 last_x, last_y = rect_segments[0][0], rect_segments[0][1]
                                 for sx, sy, ex, ey in rect_segments:
                                     current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey
-                                g.rapid(z=5)
-
+                g.rapid(z=250)
                 if enable_heating:
                     cure_dry_temp    = conductive_head.get("cureDryTemp", 90)
                     cure_dry_seconds = conductive_head.get("cureDrySeconds", 300)
@@ -1044,9 +1055,11 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 for px, py, size, shape in pads:
                     pad_area = math.pi * (size/2)**2 if shape == 'C' else size * size
                     dwell_ms = int(pad_area * dwell_factor * 1000)
+                    g.move(e=-paste_pullpush, f=paste_pullpush_speed)
                     g.rapid(z=5)
                     g.rapid(point=(px, py))
-                    g.move(z=copper_work_z)
+                    g.rapid(z=copper_work_z)
+                    g.move(e=paste_pullpush, f=paste_pullpush_speed)
                     g.write(f"G4 P{dwell_ms} ; dispense paste")
                     g.rapid(z=5)
 
@@ -1074,7 +1087,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         current_e = points_to_gcode_path(
                             g, path, current_e, ins_flow_rate, ins_layer_height,
                             ins_trace_width, enable_extrusion, use_arc_moves,
-                            work_z=insulator_work_z
+                            work_z=insulator_work_z, pullpush=global_pullpush, pullpush_speed=global_pullpush_speed
                         )
                         if enable_extrusion:
                             current_e -= retraction_distance
@@ -1087,13 +1100,15 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                             circles = generate_pad_spiral(px, py, size / 2, ins_nozzle_size, use_arc_moves=use_arc_moves)
                             g.rapid(z=5)
                             g.rapid(point=(circles[0][0], circles[0][1]))
-                            g.move(z=insulator_work_z)
+                            g.rapid(z=insulator_work_z)
                             last_x, last_y = circles[0][0], circles[0][1]
                             for cx, cy, new_circle, arc_i, arc_j in circles:
                                 if new_circle:
+                                    g.move(e=-global_pullpush, f=global_pullpush_speed)
                                     g.rapid(z=5)
                                     g.rapid(point=(cx, cy))
-                                    g.move(z=insulator_work_z)
+                                    g.rapid(z=insulator_work_z)
+                                    g.move(e=global_pullpush, f=global_pullpush_speed)
                                     last_x, last_y = cx, cy
                                 elif use_arc_moves and arc_i != 0:
                                     g.write(f"G2 X{cx:.4f} Y{cy:.4f} I{arc_i:.4f} J{arc_j:.4f}")
@@ -1107,15 +1122,16 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                             for rect_segments in all_rects:
                                 if not rect_segments:
                                     continue
+                                g.move(e=-global_pullpush, f=global_pullpush_speed)
                                 g.rapid(z=5)
                                 g.rapid(point=(rect_segments[0][0], rect_segments[0][1]))
-                                g.move(z=insulator_work_z)
+                                g.rapid(z=insulator_work_z)
+                                g.move(e=global_pullpush, f=global_pullpush_speed)
                                 last_x, last_y = rect_segments[0][0], rect_segments[0][1]
                                 for sx, sy, ex, ey in rect_segments:
                                     current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, ins_flow_rate, ins_layer_height, ins_trace_width, enable_extrusion)
-                                    last_x, last_y = ex, ey
-                                g.rapid(z=5)
-
+                                    last_x, last_y = ex, ey                
+                g.rapid(z=250)
                 if enable_heating:
                     ins_cure_temp    = insulator_head.get("cureTemp", 135)
                     ins_cure_seconds = insulator_head.get("cureSeconds", 600)
@@ -1170,7 +1186,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         current_e = points_to_gcode_path(
                             g, path, current_e, flow_rate, layer_height,
                             min_trace_width, enable_extrusion, use_arc_moves,
-                            work_z=crossover_work_z
+                            work_z=crossover_work_z, pullpush=global_pullpush, pullpush_speed=global_pullpush_speed
                         )
                         if enable_extrusion:
                             current_e -= retraction_distance
@@ -1183,13 +1199,15 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                             circles = generate_pad_spiral(px, py, size / 2, nozzle_size)
                             g.rapid(z=5)
                             g.rapid(point=(circles[0][0], circles[0][1]))
-                            g.move(z=crossover_work_z)
+                            g.rapid(z=crossover_work_z)
                             last_x, last_y = circles[0][0], circles[0][1]
                             for cx, cy, new_circle, arc_i, arc_j in circles:
                                 if new_circle:
+                                    g.move(e=-global_pullpush, f=global_pullpush_speed)
                                     g.rapid(z=5)
                                     g.rapid(point=(cx, cy))
-                                    g.move(z=crossover_work_z)
+                                    g.rapid(z=crossover_work_z)
+                                    g.move(e=global_pullpush, f=global_pullpush_speed)
                                     last_x, last_y = cx, cy
                                 else:
                                     current_e = move_with_extrusion(g, cx, cy, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
@@ -1200,15 +1218,16 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                             for rect_segments in all_rects:
                                 if not rect_segments:
                                     continue
+                                g.move(e=-global_pullpush, f=global_pullpush_speed)
                                 g.rapid(z=5)
                                 g.rapid(point=(rect_segments[0][0], rect_segments[0][1]))
-                                g.move(z=crossover_work_z)
+                                g.rapid(z=crossover_work_z)
+                                g.move(e=global_pullpush, f=global_pullpush_speed)
                                 last_x, last_y = rect_segments[0][0], rect_segments[0][1]
                                 for sx, sy, ex, ey in rect_segments:
                                     current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey
-                                g.rapid(z=5)
-
+                g.rapid(z=250)
                 if enable_heating:
                     g.write(f"M190 S{conductive_head.get('cureDryTemp', 90)}")
                     g.sleep(conductive_head.get("cureDrySeconds", 300))
