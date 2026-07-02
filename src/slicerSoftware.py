@@ -759,7 +759,7 @@ def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_widt
     return current_e
 
 def prime_lead_screw(g, lift_z=5.5, extrude_amount=40, extrude_feed=200,
-                     prime_cycles=20, cycle_delay_ms=2500, settle_ms=10000):
+                     prime_cycles=20, cycle_delay_ms=2.5, settle_ms=10000):
     """
     Prime the lead screw at startup — lifts Z, pushes piston down to seat
     against ink, then runs repeated mini-extrudes to prep for dispensing.
