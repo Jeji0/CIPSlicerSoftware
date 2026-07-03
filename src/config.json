@@ -6,13 +6,14 @@
         250.0
     ],
     "layerHeight": 0.2,
-    "conductiveLayerHeight": 0.2,
+    "conductiveLayerHeight": 0.3,
     "insulatorLayerHeight": 0.2,
-    "copperWorkZ": 7,
+    "copperWorkZ": 17.8,
     "insulatorWorkZ": 0.4,
     "crossoverWorkZ": 0.6,
-    "pasteWorkZ": 10,
-    "boardThickness": 0,
+    "pasteWorkZ": 18,
+    "cameraWorkZ": 50,
+    "boardThickness": 1,
     "printHeightOffset": 0.5,
     "layerMode": "single",
     "printSpeed": 60.0,
@@ -83,7 +84,7 @@
             "toolNumber": 3
         }
     ],
-    "nozzleSize": 0.35,
+    "nozzleSize": 0.2,
     "traceWidth": 0.25,
     "cure_dry_temp": 90.0,
     "cure_dry_seconds": 300.0,
