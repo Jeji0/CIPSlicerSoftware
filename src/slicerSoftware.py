@@ -4,7 +4,7 @@ import json
 import re
 import math
 import zipfile
-
+from shapely.geometry import Point
 from pygerber.gerber.api import GerberFile, GerberJobFile
 from gscrib import GCodeBuilder
 
@@ -57,36 +57,41 @@ def generate_shapely_toolpaths(raw_segments, nozzle_size, pads=None, stepover_ra
 
     # subtract pad areas so traces stop flush at pad boundaries
     if pads:
-        from shapely.geometry import Point
-        pad_polys = []
-        shrink = nozzle_size / 2  # pull back by half nozzle so toolpath meets pad edge flush
+        shrink = nozzle_size / 2
+        subtract_polys = []
+        union_polys = []
         for x, y, size, shape in pads:
             if shape == 'C':
-                pad_polys.append(Point(x, y).buffer(max(0, size / 2 - shrink)))
+                subtract_polys.append(Point(x, y).buffer(max(0, size / 2 - shrink)))
             elif shape.startswith('RR:'):
-                height = float(shape.split(':')[1])
-                pad_polys.append(Polygon([
-                    (x - size/2 + shrink, y - height/2 + shrink),
-                    (x + size/2 - shrink, y - height/2 + shrink),
-                    (x + size/2 - shrink, y + height/2 - shrink),
-                    (x - size/2 + shrink, y + height/2 - shrink)
+                h = float(shape.split(':')[1])
+                w = size
+                union_polys.append(Polygon([
+                    (x - w/2, y - h/2), (x + w/2, y - h/2),
+                    (x + w/2, y + h/2), (x - w/2, y + h/2)
                 ]))
             elif shape == 'R':
-                pad_polys.append(Polygon([
-                    (x - size/2 + shrink, y - size/2 + shrink),
-                    (x + size/2 - shrink, y - size/2 + shrink),
-                    (x + size/2 - shrink, y + size/2 - shrink),
-                    (x - size/2 + shrink, y + size/2 - shrink)
+                half = size / 2
+                union_polys.append(Polygon([
+                    (x - half, y - half), (x + half, y - half),
+                    (x + half, y + half), (x - half, y + half)
                 ]))
-        if pad_polys:
-            merged_layer = merged_layer.difference(unary_union(pad_polys))
+        if union_polys:
+            merged_layer = unary_union([merged_layer] + union_polys)
+        if subtract_polys:
+            merged_layer = merged_layer.difference(unary_union(subtract_polys))
 
     toolpaths = []
     current_inset = nozzle_size / 2.0
     stepover_dist = nozzle_size * stepover_ratio
 
+    first_pass = True
     while True:
-        path_geo = merged_layer.buffer(-current_inset)
+        path_geo = merged_layer.buffer(-current_inset, join_style=2)
+        if first_pass and pads and union_polys:
+            # after the seamless outer pass, exclude rect pad interiors (raster fills them)
+            merged_layer = merged_layer.difference(unary_union(union_polys))
+            first_pass = False
         if path_geo.is_empty:
             break
         geoms = path_geo.geoms if hasattr(path_geo, 'geoms') else [path_geo]
@@ -216,7 +221,7 @@ def get_head(configFile: dict, head_type: str) -> dict:
         }
     if head_type == "camera":
         return {
-            "toolNumber": configFile.get("cameraToolNumber", 3)
+            "toolNumber": configFile.get("cameraToolNumber", 2)
         }
     return {}
 
@@ -580,7 +585,7 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
         return []
 
     step   = nozzle_size * 1.5
-    inset  = nozzle_size / 2  # pull first pass in so bead edge meets true pad boundary
+    inset  = nozzle_size / 2 + nozzle_size * 1.5  # pull first pass in so bead edge meets true pad boundary
     half_w = max(width / 2 - inset, 0)
     half_h = max(height / 2 - inset, 0)
     all_rects = []
@@ -610,7 +615,7 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
 
     return all_rects
 
-def camera_sweep(g, safe_z: float, board_size_x: float = 0, board_size_y: float = 0,
+def camera_sweep(g, safe_z:float=50.0, board_size_x: float = 0, board_size_y: float = 0,
                  layer_index: int = 0, camera_head_tool: int = 3,
                  row_spacing: float = 10.0, column_spacing: float = 10.0,
                  origin_x: float = 0, origin_y: float = 0) -> bool:
@@ -758,7 +763,7 @@ def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_widt
 
     return current_e
 
-def prime_lead_screw(g, lift_z=5.5, extrude_amount=40, extrude_feed=200,
+def prime_lead_screw(g, lift_z=5.5, extrude_amount=20, extrude_feed=200,
                      prime_cycles=20, cycle_delay_s=2.5, settle_s=10):
     """
     Prime the lead screw at startup — lifts Z, pushes piston down to seat
@@ -793,14 +798,16 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     current_e           = 0.0
 
     # Z heights for each layer — configurable, with sensible defaults
-    copper_work_z    = configFile.get("copperWorkZ", 0.2)
-    insulator_work_z = configFile.get("insulatorWorkZ", 0.4)
-    crossover_work_z = configFile.get("crossoverWorkZ", 0.6)
-    paste_work_z     = configFile.get("pasteWorkZ", 0.1)
+    copper_work_z    = configFile.get("copperWorkZ")
+    insulator_work_z = configFile.get("insulatorWorkZ")
+    crossover_work_z = configFile.get("crossoverWorkZ")
+    paste_work_z     = configFile.get("pasteWorkZ")
+    camera_work_z  = configFile.get("cameraWorkZ")
+
     print_feed_rate = configFile.get("printFeedRate", 3600)
 
     camera_head        = get_head(configFile, "camera")
-    camera_tool_number = camera_head.get("toolNumber", 3)
+    camera_tool_number = camera_head.get("toolNumber", 2)
     conductive_head    = get_head(configFile, "conductive")
     insulator_head     = get_head(configFile, "insulator")
 
@@ -1010,7 +1017,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                 for sx, sy, ex, ey in rect_segments:
                                     current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey
-                g.rapid(z=100, y=-40)
+                g.write("G1 E-400 F200 ; large pull out to stop ink extrusion")
+                g.rapid(x=0,y=-20, z=150)
                 if enable_heating:
                     cure_dry_temp    = conductive_head.get("cureDryTemp", 90)
                     cure_dry_seconds = conductive_head.get("cureDrySeconds", 300)
@@ -1039,7 +1047,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         sweep_origin_y = global_offset_y
                         sweep_size_x   = board_size_x
                         sweep_size_y   = board_size_y
-                    camera_sweep(g, safe_z=5,
+                    camera_sweep(g, safe_z=camera_work_z,
                                  board_size_x=sweep_size_x,
                                  board_size_y=sweep_size_y,
                                  layer_index=0,
@@ -1132,7 +1140,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                 for sx, sy, ex, ey in rect_segments:
                                     current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, ins_flow_rate, ins_layer_height, ins_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey                
-                g.rapid(z=100, y=-40)
+                g.rapid(x=0,y=-20, z=150)
                 if enable_heating:
                     ins_cure_temp    = insulator_head.get("cureTemp", 135)
                     ins_cure_seconds = insulator_head.get("cureSeconds", 600)
@@ -1152,7 +1160,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         sweep_origin_y = min(all_y)
                         sweep_size_x   = max(all_x) - sweep_origin_x
                         sweep_size_y   = max(all_y) - sweep_origin_y
-                        camera_sweep(g, safe_z=5,
+                        camera_sweep(g, safe_z=camera_work_z,
                                      board_size_x=sweep_size_x,
                                      board_size_y=sweep_size_y,
                                      layer_index=1,
@@ -1228,7 +1236,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                 for sx, sy, ex, ey in rect_segments:
                                     current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey
-                g.rapid(z=100, y=-40)
+                g.rapid(x=0,y=-20, z=150)
                 if enable_heating:
                     g.write(f"M190 S{conductive_head.get('cureDryTemp', 90)}")
                     g.sleep(conductive_head.get("cureDrySeconds", 300))
@@ -1248,7 +1256,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         sweep_origin_y = min(all_y)
                         sweep_size_x   = max(all_x) - sweep_origin_x
                         sweep_size_y   = max(all_y) - sweep_origin_y
-                        camera_sweep(g, safe_z=5,
+                        camera_sweep(g, safe_z=camera_work_z,
                                      board_size_x=sweep_size_x,
                                      board_size_y=sweep_size_y,
                                      layer_index=2,
