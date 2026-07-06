@@ -988,6 +988,18 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
     # --- G-Code Generation Phase ---
     with GCodeBuilder(output=output_file) as g:
+        g.write("; --- GERBER FILE TRANSFER ---")
+        for gbr_path, layer_type, is_bottom in files_to_process:
+            if layer_type == "copper" and not is_bottom:
+                g.write("M118 BEGIN_FILE_TRANSFER")
+                with open(gbr_path, "r") as top_copper_gbr_file:
+                    for line in top_copper_gbr_file:
+                        # .strip() removes the trailing newline character (\n)
+                        g.write("M118 " + line)
+                g.write("M118 END_FILE_TRANSFER")
+                break
+
+
         g.write("; --- BEGIN PRINT ---")
         g.write("G21 ; set units to millimeters")
         g.write("G90 ; absolute coordinates")

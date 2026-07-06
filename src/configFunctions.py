@@ -45,7 +45,6 @@ printProp = {
 
 filePath = {
     "gerberFile": "TestFiles/test-gbr.zip",
-    "gerberJobFile": "TestFiles/test-job.gbrjob"
 }
 
 def updConf(input):
