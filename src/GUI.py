@@ -61,7 +61,7 @@ def load_config_into_fields(fields):
         fields["gerberFile"].insert(0, config.get("gerberFile", ""))
 
         fields["gerberJobFile"].delete(0, tk.END)
-        fields["gerberJobFile"].insert(0, config.get("gerberJobFile", ""))
+        #fields["gerberJobFile"].insert(0, config.get("gerberJobFile", ""))
         active = config.get("activeHeads", ["conductor3"])
         if active:
             fields["activeHead"].set(active[0])
@@ -142,8 +142,17 @@ def save_settings(fields, output):
             "gerberFile": fields["gerberFile"].get(),
             "gerberJobFile": fields["gerberJobFile"].get(),
             "printFeedRate": float(fields["printFeedRate"].get()),
-            "activeHeads": [fields["activeHead"].get()]
         }
+        # preserve the full activeHeads list; just ensure the selected head is in it
+        try:
+            with open("config.json", "r") as f:
+                current = json.load(f).get("activeHeads", [])
+        except Exception:
+            current = []
+        selected = fields["activeHead"].get()
+        if selected not in current:
+            current.append(selected)
+        updates["activeHeads"] = current
         cF.updConf(updates)
         output.insert(tk.END, "Settings saved.\n")
         output.see(tk.END)
@@ -316,6 +325,9 @@ def generateGcode(fields, output, btn, root):
                 use_arc_moves=fields["toggle_arc_moves"].get(),
                 enable_extrusion=fields["toggle_extrusion"].get(),
                 enable_purge=fields["toggle_purge"].get(),
+                enable_conductive=fields["toggle_conductive"].get(),
+                enable_paste=fields["toggle_paste"].get(),
+                ink_traces_only=fields["toggle_ink_traces_only"].get(),
             )
 
             gerber_path = fields["gerberFile"].get()
@@ -357,11 +369,12 @@ def validate_fields(fields):
         "cureTemp", "cureSeconds", "printFeedRate"
     ]
 
+    zero_ok = {"cureDryTemp", "cureDrySeconds", "cureTemp", "cureSeconds"}
     for key in numeric_fields:
         entry = fields[key]
         try:
             val = float(entry.get())
-            if val <= 0:
+            if val < 0 or (val == 0 and key not in zero_ok):
                 raise ValueError
             entry.config(highlightbackground="green", highlightcolor="green", highlightthickness=1)
         except ValueError:
@@ -469,6 +482,10 @@ def GUI():
     fields["toggle_arc_moves"] = tk.BooleanVar(value=False)
     fields["toggle_extrusion"] = tk.BooleanVar(value=False)
     fields["toggle_purge"] = tk.BooleanVar(value=True)
+    fields["toggle_conductive"] = tk.BooleanVar(value=True)
+    fields["toggle_paste"] = tk.BooleanVar(value=True)
+    fields["toggle_ink_traces_only"] = tk.BooleanVar(value=False)
+
     tk.Checkbutton(toggle_frame, text="Purge",
                    variable=fields["toggle_purge"],
                    font=("Helvetica", 11)).grid(row=1, column=2, sticky="w", padx=(0, 16))
@@ -491,6 +508,15 @@ def GUI():
     tk.Checkbutton(toggle_frame, text="Crossover bridge",
                    variable=fields["toggle_crossover"],
                    font=("Helvetica", 11)).grid(row=0, column=3, sticky="w")
+    tk.Checkbutton(toggle_frame, text="Conductive ink",
+               variable=fields["toggle_conductive"],
+               font=("Helvetica", 11)).grid(row=1, column=3, sticky="w", padx=(0, 16))
+    tk.Checkbutton(toggle_frame, text="Solder paste",
+               variable=fields["toggle_paste"],
+               font=("Helvetica", 11)).grid(row=2, column=0, sticky="w", padx=(0, 16))
+    tk.Checkbutton(toggle_frame, text="Ink traces only (pads via paste)",
+               variable=fields["toggle_ink_traces_only"],
+               font=("Helvetica", 11)).grid(row=2, column=1, columnspan=2, sticky="w", padx=(0, 16))
 
     # ── BUTTONS ──
     btn_frame = tk.Frame(root)

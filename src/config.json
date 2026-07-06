@@ -19,7 +19,7 @@
     "printSpeed": 60.0,
     "printFeedRate": 3600.0,
     "gerberFile": "TestFiles/test6b-gbr.zip",
-    "gerberJobFile": "TestFiles/test6b-job.gbrjob",
+    "gerberJobFile": "",
     "steps_per_mm_x": 80,
     "steps_per_mm_y": 80,
     "steps_per_mm_z": 400,
@@ -28,7 +28,10 @@
     "paste_pullpush": 1.0,
     "paste_pullpush_speed": 300,
     "activeHeads": [
-        "conductor3"
+        "conductor3",
+        "si3104",
+        "paste",
+        "camera"
     ],
     "heads": [
         {
@@ -84,11 +87,11 @@
             "toolNumber": 3
         }
     ],
-    "nozzleSize": 0.2,
+    "nozzleSize": 0.3,
     "traceWidth": 0.25,
     "cure_dry_temp": 90.0,
     "cure_dry_seconds": 300.0,
-    "cure_temp": 170.0,
-    "cure_seconds": 900.0,
+    "cure_temp": 0.0,
+    "cure_seconds": 0.0,
     "retractionDistance": 0.5
 }

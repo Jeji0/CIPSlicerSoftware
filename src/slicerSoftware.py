@@ -37,11 +37,13 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Note: Conductor 3 — no burnishing needed, no flipping needed
 # Note: insulator cover type determines if stop is at layer 3.5 or 4
 
-def generate_shapely_toolpaths(raw_segments, nozzle_size, pads=None, stepover_ratio=0.85):
+def generate_shapely_toolpaths(raw_segments, nozzle_size, pads=None, stepover_ratio=0.85, subtract_rect_pads=False):
     """
     Merges overlapping trace segments and generates concentric fill paths.
     raw_segments: list of ((start_x, start_y), (end_x, end_y), trace_width)
     pads: optional list of (x, y, size, shape) to subtract from trace geometry
+    subtract_rect_pads: subtract rect pads from traces instead of unioning them
+        (ink-traces-only mode, where pads are drawn by the paste head)
     Returns a list of continuous paths (each path is a list of (x,y) tuples).
     """
     if not raw_segments:
@@ -66,16 +68,33 @@ def generate_shapely_toolpaths(raw_segments, nozzle_size, pads=None, stepover_ra
             elif shape.startswith('RR:'):
                 h = float(shape.split(':')[1])
                 w = size
-                union_polys.append(Polygon([
-                    (x - w/2, y - h/2), (x + w/2, y - h/2),
-                    (x + w/2, y + h/2), (x - w/2, y + h/2)
-                ]))
+                if subtract_rect_pads:
+                    sw = max(0, w / 2 - shrink)
+                    sh = max(0, h / 2 - shrink)
+                    if sw > 0 and sh > 0:
+                        subtract_polys.append(Polygon([
+                            (x - sw, y - sh), (x + sw, y - sh),
+                            (x + sw, y + sh), (x - sw, y + sh)
+                        ]))
+                else:
+                    union_polys.append(Polygon([
+                        (x - w/2, y - h/2), (x + w/2, y - h/2),
+                        (x + w/2, y + h/2), (x - w/2, y + h/2)
+                    ]))
             elif shape == 'R':
                 half = size / 2
-                union_polys.append(Polygon([
-                    (x - half, y - half), (x + half, y - half),
-                    (x + half, y + half), (x - half, y + half)
-                ]))
+                if subtract_rect_pads:
+                    sh = max(0, half - shrink)
+                    if sh > 0:
+                        subtract_polys.append(Polygon([
+                            (x - sh, y - sh), (x + sh, y - sh),
+                            (x + sh, y + sh), (x - sh, y + sh)
+                        ]))
+                else:
+                    union_polys.append(Polygon([
+                        (x - half, y - half), (x + half, y - half),
+                        (x + half, y + half), (x - half, y + half)
+                    ]))
         if union_polys:
             merged_layer = unary_union([merged_layer] + union_polys)
         if subtract_polys:
@@ -103,6 +122,19 @@ def generate_shapely_toolpaths(raw_segments, nozzle_size, pads=None, stepover_ra
         current_inset += stepover_dist
 
     return toolpaths
+
+def order_paths_nearest(toolpaths):
+    """Greedy nearest-neighbor ordering of toolpaths to minimize G0 travel."""
+    if len(toolpaths) <= 2:
+        return toolpaths
+    remaining = list(toolpaths)
+    ordered   = [remaining.pop(0)]
+    while remaining:
+        lx, ly = ordered[-1][-1][0], ordered[-1][-1][1]
+        best_i = min(range(len(remaining)),
+                     key=lambda i: (remaining[i][0][0]-lx)**2 + (remaining[i][0][1]-ly)**2)
+        ordered.append(remaining.pop(best_i))
+    return ordered
 
 def find_crossover_regions(raw_segments, nozzle_size):
     """
@@ -257,6 +289,8 @@ def get_layer_type_from_filename(filename: str) -> str:
         return "copper_bottom"
     if any(x in f for x in ["insulator"]):
         return "insulator"
+    if any(x in f for x in ["paste_top", "f_paste", "top_paste", "gtp", "paste"]):
+        return "paste_top"
     if any(x in f for x in ["soldermask_top", "f_mask", "top_mask", "gts"]):
         return "mask_top"
     if any(x in f for x in ["soldermask_bottom", "b_mask", "bottom_mask", "gbs"]):
@@ -299,10 +333,11 @@ def extract_coords(gbr_path: str, offset_x: float = None, offset_y: float = None
             shape  = f'RR:{height}'
         elif apt_type == 'RoundRect':
             try:
-                dxs    = [abs(float(params[i])) for i in range(1, len(params), 2)]
-                dys    = [abs(float(params[i])) for i in range(2, len(params), 2)]
-                width  = max(dxs) * 2 if dxs else 0.2
-                height = max(dys) * 2 if dys else 0.2
+                r      = abs(float(params[0]))  # corner radius extends beyond corner points
+                dxs    = [abs(float(params[i])) for i in range(1, len(params) - 1, 2)]
+                dys    = [abs(float(params[i])) for i in range(2, len(params) - 1, 2)]
+                width  = (max(dxs) + r) * 2 * scale
+                height = (max(dys) + r) * 2 * scale
                 size  = width
                 shape = f'RR:{height}'
             except:
@@ -365,6 +400,21 @@ def extract_coords(gbr_path: str, offset_x: float = None, offset_y: float = None
             size  = aperture_sizes.get(current_aperture, 0.2)
             shape = aperture_shapes.get(current_aperture, 'C')
             raw.append((current_x, current_y, size, shape))
+
+    # --- G36/G37 filled regions → treat as rectangular pads ---
+    for region_match in re.finditer(r'G36\*(.*?)G37\*', source, re.DOTALL):
+        block = region_match.group(1)
+        pts = [(int(m.group(1)) / divisor * scale, int(m.group(2)) / divisor * scale)
+               for m in re.finditer(r'X(-?\d+)Y(-?\d+)D0[12]\*', block)]
+        if len(pts) >= 4:
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            w  = max(xs) - min(xs)
+            h  = max(ys) - min(ys)
+            cx = (max(xs) + min(xs)) / 2
+            cy = (max(ys) + min(ys)) / 2
+            if w > 0 and h > 0:
+                raw.append((cx, cy, w, f'RR:{h}'))
 
     if not raw:
         return [], 0, 0
@@ -572,7 +622,7 @@ def generate_pad_spiral(cx: float, cy: float, radius: float, nozzle_size: float,
 
     return points
 
-def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
+def generate_pad_raster(cx, cy, size, nozzle_size, shape='C', inset=None, fill_center=False):
     """Fill pad with concentric rectangles, returned as separate paths."""
 
     if shape.startswith('RR:'):
@@ -585,7 +635,8 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
         return []
 
     step   = nozzle_size * 1.5
-    inset  = nozzle_size / 2 + nozzle_size * 1.5  # pull first pass in so bead edge meets true pad boundary
+    if inset is None:
+        inset = nozzle_size / 2 + nozzle_size * 1.5  # pull first pass in so bead edge meets true pad boundary
     half_w = max(width / 2 - inset, 0)
     half_h = max(height / 2 - inset, 0)
     all_rects = []
@@ -599,6 +650,13 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C'):
         if w == 0 and h == 0:
             break
         if layer > 0 and (w < step / 2 or h < step / 2):
+            if fill_center and max(w, h) >= step / 2:
+                # one dimension collapsed but the other still has material:
+                # finish with a straight stripe down the remaining center strip
+                if w >= h:
+                    all_rects.append([(cx - w, cy, cx + w, cy)])
+                else:
+                    all_rects.append([(cx, cy - h, cx, cy + h)])
             break
 
         rect_points = [
@@ -696,6 +754,12 @@ def fit_arc_to_points(points, tolerance=0.01):
     for px, py in points:
         if abs(math.sqrt((px-ux)**2 + (py-uy)**2) - r) > tolerance:
             return None
+    # reject shapes whose vertices happen to lie on a circle (e.g. squares):
+    # midpoints of a true arc's segments also lie on the circle, a polygon's don't
+    for (x1, y1), (x2, y2) in zip(points[:-1], points[1:]):
+        mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+        if abs(math.sqrt((mx-ux)**2 + (my-uy)**2) - r) > tolerance:
+            return None
     ex, ey = points[-1]
     chord_len = math.sqrt((ex - ax)**2 + (ey - ay)**2)
     if chord_len < 1e-10:
@@ -781,7 +845,8 @@ def prime_lead_screw(g, lift_z=5.5, extrude_amount=20, extrude_feed=200,
     print("Lead screw primed")
 
 def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
-        enable_crossover=True, use_arc_moves=False, enable_extrusion=False, enable_purge=True):
+        enable_crossover=True, use_arc_moves=False, enable_extrusion=False, enable_purge=True, enable_conductive=True, enable_paste=True,
+        ink_traces_only=False):
     """Main entry point — loads config, parses Gerber files, generates G-code."""
     print("=== NEW SLICER v2 ===")
 
@@ -953,6 +1018,9 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
             print(f"\n--- Processing Layer: {fname} ({layer_type}) ---")
 
             if layer_type == "copper":
+                if not enable_conductive:
+                    print(f"  skipping {fname} (conductive ink disabled)")
+                    continue
                 min_trace_width = conductive_head.get("traceWidth", 0.225)
                 nozzle_size     = conductive_head.get("nozzleSize", 0.225)
                 flow_rate       = conductive_head.get("flowRate", 0.05)
@@ -966,7 +1034,9 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
                 if raw_segments:
                     print(f"  extracted {len(raw_segments)} trace segments")
-                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, nozzle_size, pads=pads)
+                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, min_trace_width, pads=pads,
+                                                                 subtract_rect_pads=ink_traces_only)
+                    layer_toolpaths = order_paths_nearest(layer_toolpaths)
                     for path in layer_toolpaths:
                         if not path or len(path) < 2:
                             continue
@@ -979,7 +1049,9 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                             current_e -= retraction_distance
                             g.write(f"G1 E{current_e:.5f} F1800")
 
-                if pads:
+                if pads and ink_traces_only:
+                    print(f"  skipping {len(pads)} ink pads (pads drawn by solder paste head)")
+                elif pads:
                     print(f"  extracted {len(pads)} pads")
                     for px, py, size, shape in pads:
                         if shape == 'C':
@@ -1029,6 +1101,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     g.write(f"M190 S{cure_temp}")
                     g.sleep(cure_seconds)
                     g.write("M190 S0")
+                    g.write("G4 S1800 ; cool-down wait 30 min")
 
                 if enable_camera_sweep:
                     if pads or raw_segments:
@@ -1056,21 +1129,71 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                  origin_y=sweep_origin_y)
 
             elif layer_type == "paste":
-                paste_head   = get_head(configFile, "paste")
-                dwell_factor = paste_head.get("dwellFactor", 0.5)
+                if not enable_paste:
+                    print(f"  skipping {fname} (solder paste disabled)")
+                    continue
+                paste_head        = get_head(configFile, "paste")
+                dwell_factor      = paste_head.get("dwellFactor", 0.5)
+                paste_nozzle_size = paste_head.get("nozzleSize", 0.3)
+                paste_feed_rate   = configFile.get("pasteFeedRate", 600)
                 pads, _, _   = extract_coords(gbr_path, offset_x=global_offset_x, offset_y=global_offset_y)
                 if enable_tool_change:
                     g.write(f"T{paste_head.get('toolNumber', 2)} ; paste head")
+                print(f"  extracted {len(pads)} paste pads")
                 for px, py, size, shape in pads:
-                    pad_area = math.pi * (size/2)**2 if shape == 'C' else size * size
-                    dwell_ms = int(pad_area * dwell_factor * 1000)
-                    g.move(e=-paste_pullpush, f=paste_pullpush_speed)
-                    g.rapid(z=5)
-                    g.rapid(point=(px, py))
-                    g.rapid(z=paste_work_z)
-                    g.move(e=paste_pullpush, f=paste_pullpush_speed)
-                    g.write(f"G4 P{dwell_ms} ; dispense paste")
-                    g.rapid(z=5)
+                    drawn = False
+                    if shape == 'C':
+                        circles = generate_pad_spiral(px, py, size / 2, paste_nozzle_size)
+                        if circles:
+                            g.rapid(z=5)
+                            g.rapid(point=(circles[0][0], circles[0][1]))
+                            g.rapid(z=paste_work_z)
+                            g.move(e=paste_pullpush, f=paste_pullpush_speed)
+                            first = True
+                            for cx2, cy2, new_circle, _, _ in circles:
+                                if new_circle and not first:
+                                    g.move(e=-paste_pullpush, f=paste_pullpush_speed)
+                                    g.rapid(z=5)
+                                    g.rapid(point=(cx2, cy2))
+                                    g.rapid(z=paste_work_z)
+                                    g.move(e=paste_pullpush, f=paste_pullpush_speed)
+                                else:
+                                    g.move(point=(cx2, cy2), f=paste_feed_rate)
+                                first = False
+                            g.move(e=-paste_pullpush, f=paste_pullpush_speed)
+                            g.rapid(z=5)
+                            drawn = True
+                    else:
+                        # tighter first-pass inset than conductive ink so the
+                        # paste bead edge lands on the aperture boundary
+                        all_rects = generate_pad_raster(px, py, size, paste_nozzle_size,
+                                                        shape=shape, inset=paste_nozzle_size / 2,
+                                                        fill_center=True)
+                        for rect_segments in all_rects:
+                            if not rect_segments:
+                                continue
+                            g.rapid(z=5)
+                            g.rapid(point=(rect_segments[0][0], rect_segments[0][1]))
+                            g.rapid(z=paste_work_z)
+                            g.move(e=paste_pullpush, f=paste_pullpush_speed)
+                            g.move(point=(rect_segments[0][2], rect_segments[0][3]), f=paste_feed_rate)
+                            for sx, sy, ex, ey in rect_segments[1:]:
+                                g.move(point=(ex, ey))
+                            g.move(e=-paste_pullpush, f=paste_pullpush_speed)
+                            drawn = True
+                        if drawn:
+                            g.rapid(z=5)
+                    if not drawn:
+                        # pad too small to raster with this nozzle — fall back to dot dispense
+                        pad_area = math.pi * (size/2)**2 if shape == 'C' else size * size
+                        dwell_ms = int(pad_area * dwell_factor * 1000)
+                        g.rapid(z=5)
+                        g.rapid(point=(px, py))
+                        g.rapid(z=paste_work_z)
+                        g.move(e=paste_pullpush, f=paste_pullpush_speed)
+                        g.write(f"G4 P{dwell_ms} ; dispense paste")
+                        g.move(e=-paste_pullpush, f=paste_pullpush_speed)
+                        g.rapid(z=5)
 
             elif layer_type == "insulator":
                 ins_nozzle_size  = insulator_head.get("nozzleSize", 0.225)
@@ -1089,7 +1212,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
                 if raw_segments:
                     print(f"  extracted {len(raw_segments)} insulator trace segments")
-                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, ins_nozzle_size, pads=pads)
+                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, min_trace_width, pads=pads)
+                    layer_toolpaths = order_paths_nearest(layer_toolpaths)
                     for path in layer_toolpaths:
                         if not path or len(path) < 2:
                             continue
@@ -1147,6 +1271,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     g.write(f"M190 S{ins_cure_temp}")
                     g.sleep(ins_cure_seconds)
                     g.write("M190 S0")
+                    g.write("G4 S1800 ; cool-down wait 30 min")
 
                 if enable_camera_sweep:
                     if pads or raw_segments:
@@ -1188,7 +1313,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
                 if raw_segments:
                     print(f"  extracted {len(raw_segments)} crossover trace segments")
-                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, nozzle_size, pads=pads)
+                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, min_trace_width, pads=pads)
+                    layer_toolpaths = order_paths_nearest(layer_toolpaths)
                     for path in layer_toolpaths:
                         if not path or len(path) < 2:
                             continue
@@ -1243,6 +1369,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     g.write(f"M190 S{conductive_head.get('cureTemp', 170)}")
                     g.sleep(conductive_head.get("cureSeconds", 900))
                     g.write("M190 S0")
+                    g.write("G4 S1800 ; cool-down wait 30 min")
 
                 if enable_camera_sweep:
                     if pads or raw_segments:
