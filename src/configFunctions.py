@@ -31,7 +31,7 @@ printProp = {
     "steps_per_mm_x": 80,
     "steps_per_mm_y": 80,
     "steps_per_mm_z": 400,
-    "nozzleSize": 0.225,
+    "nozzleSize": 0.2,
     "traceWidth": 0.25,
     "cure_dry_temp": 90,
     "cure_dry_seconds": 300,
@@ -40,7 +40,8 @@ printProp = {
     "insulator_cure_temp": 135,
     "insulator_cure_seconds": 600,
     "insulator_head_offset_x": 0,
-    "insulator_head_offset_y": 0
+    "insulator_head_offset_y": 0,
+    "copperWorkZ": 0.4,
 }
 
 filePath = {

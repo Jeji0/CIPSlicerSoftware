@@ -827,7 +827,7 @@ def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_widt
 
     return current_e
 
-def prime_lead_screw(g, lift_z=5.5, extrude_amount=20, extrude_feed=200,
+def prime_lead_screw(g, lift_z=5.5, work_z=0.2, extrude_amount=20, extrude_feed=200,
                      prime_cycles=20, cycle_delay_s=2.5, settle_s=10):
     """
     Prime the lead screw at startup — lifts Z, pushes piston down to seat
@@ -842,6 +842,11 @@ def prime_lead_screw(g, lift_z=5.5, extrude_amount=20, extrude_feed=200,
         g.write(f"G4 S{cycle_delay_s} ; wait {cycle_delay_s}s")
 
     g.write(f"G4 S{settle_s} ; settle wait")
+
+    "Jerk the excess ink away"
+    g.rapid(z=work_z)
+    g.move(x=2)
+    g.rapid(z=lift_z)
     print("Lead screw primed")
 
 def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
@@ -1012,7 +1017,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
         # ── PRIME LEAD SCREW ──────────────────────────────────
         if enable_purge:
-            prime_lead_screw(g)
+            prime_lead_screw(g, work_z=copper_work_z)
 
         layer_mode = configFile.get("layerMode", "single")
 
