@@ -863,7 +863,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     retraction_distance = configFile.get("retractionDistance", 0.5)
     global_pullpush       = configFile.get("pullpush", 30)
     global_pullpush_speed = configFile.get("pullpush_speed", 200)
-    paste_pullpush          = configFile.get("paste_pullpush", 30)
+    paste_pullpush          = configFile.get("paste_pullpush", 60)
     paste_pullpush_speed    = configFile.get("paste_pullpush_speed", 200)
     current_e           = 0.0
 
