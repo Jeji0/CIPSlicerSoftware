@@ -853,7 +853,7 @@ def prime_lead_screw(g, lift_z=5.5, work_z=0.2, extrude_amount=20, extrude_feed=
 
 def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
         enable_crossover=True, use_arc_moves=False, enable_extrusion=False, enable_purge=True, enable_conductive=True, enable_paste=True,
-        ink_traces_only=False):
+        ink_traces_only=False, enable_gerber_transfer=True):
     """Main entry point — loads config, parses Gerber files, generates G-code."""
     print("=== NEW SLICER v2 ===")
 
@@ -995,18 +995,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
     # --- G-Code Generation Phase ---
     with GCodeBuilder(output=output_file) as g:
-        g.write("; --- GERBER FILE TRANSFER ---")
-        for gbr_path, layer_type, is_bottom in files_to_process:
-            if layer_type == "copper" and not is_bottom:
-                g.write("M118 BEGIN_FILE_TRANSFER")
-                with open(gbr_path, "r") as top_copper_gbr_file:
-                    for line in top_copper_gbr_file:
-                        # .strip() removes the trailing newline character (\n)
-                        g.write("M118 " + line)
-                g.write("M118 END_FILE_TRANSFER")
-                break
-
-
         g.write("; --- BEGIN PRINT ---")
         g.write("G21 ; set units to millimeters")
         g.write("G90 ; absolute coordinates")

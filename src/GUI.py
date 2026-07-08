@@ -328,6 +328,7 @@ def generateGcode(fields, output, btn, root):
                 enable_conductive=fields["toggle_conductive"].get(),
                 enable_paste=fields["toggle_paste"].get(),
                 ink_traces_only=fields["toggle_ink_traces_only"].get(),
+                enable_gerber_transfer=fields["toggle_gerber_transfer"].get(),
             )
 
             gerber_path = fields["gerberFile"].get()
@@ -485,6 +486,7 @@ def GUI():
     fields["toggle_conductive"] = tk.BooleanVar(value=True)
     fields["toggle_paste"] = tk.BooleanVar(value=True)
     fields["toggle_ink_traces_only"] = tk.BooleanVar(value=False)
+    fields["toggle_gerber_transfer"] = tk.BooleanVar(value=True)
 
     tk.Checkbutton(toggle_frame, text="Purge",
                    variable=fields["toggle_purge"],
@@ -517,6 +519,9 @@ def GUI():
     tk.Checkbutton(toggle_frame, text="Ink traces only (pads via paste)",
                variable=fields["toggle_ink_traces_only"],
                font=("Helvetica", 11)).grid(row=2, column=1, columnspan=2, sticky="w", padx=(0, 16))
+    tk.Checkbutton(toggle_frame, text="Gerber file transfer",
+               variable=fields["toggle_gerber_transfer"],
+               font=("Helvetica", 11)).grid(row=2, column=3, sticky="w")
 
     # ── BUTTONS ──
     btn_frame = tk.Frame(root)
