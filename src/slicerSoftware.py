@@ -217,6 +217,17 @@ def validate_config(config: dict) -> None:
     if config.get("layerMode", "single") not in ["single", "multi"]:
         errors.append("layerMode must be 'single' or 'multi'")
 
+    heads  = config.get("heads", [])
+    active = config.get("activeHeads", [])
+    tools  = {}
+    for head in heads:
+        if head.get("id") in active:
+            tn = head.get("toolNumber")
+            if tn in tools:
+                errors.append(f"duplicate toolNumber {tn}: heads '{tools[tn]}' and '{head.get('id')}'")
+            else:
+                tools[tn] = head.get("id")
+
     if errors:
         print("Config validation failed:")
         for e in errors:
@@ -255,6 +266,14 @@ def get_head(configFile: dict, head_type: str) -> dict:
         return {
             "toolNumber": configFile.get("cameraToolNumber", 2)
         }
+    if head_type == "paste":
+        return {
+            "toolNumber": configFile.get("pasteToolNumber", 1),
+            "nozzleSize": configFile.get("pasteNozzleSize", 0.3),
+            "dwellFactor": configFile.get("pasteDwellFactor", 0.5),
+            "cureTemp": 0,
+            "cureSeconds": 0
+        }
     return {}
 
 def get_head_for_layer(configFile: dict, layer_type: str) -> dict:
@@ -263,6 +282,8 @@ def get_head_for_layer(configFile: dict, layer_type: str) -> dict:
         return get_head(configFile, "conductive")
     if layer_type == "insulator":
         return get_head(configFile, "insulator")
+    if layer_type == "paste":
+        return get_head(configFile, "paste")
     return get_head(configFile, "conductive")  # default
 
 def get_tool_number(head: dict) -> int:
@@ -785,7 +806,7 @@ def fit_arc_to_points(points, tolerance=0.01):
 
 def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_width,
                           enable_extrusion, use_arc_moves, arc_tolerance=0.002,
-                          min_arc_points=5, work_z=0.2, pullpush=30.0, pullpush_speed=200):
+                          min_arc_points=5, work_z=0.2, pullpush=30.0, pullpush_speed=200, lift_z=5):
     """Write a Shapely path to G-code, replacing arc segments with G2/G3 where possible."""
     if not path or len(path) < 2:
         return current_e
@@ -793,7 +814,7 @@ def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_widt
     start_x, start_y = path[0]
     if pullpush > 0:
         g.move(e=-pullpush, f=pullpush_speed)
-    g.rapid(z=5)
+    g.rapid(z=lift_z)
     g.rapid(point=(start_x, start_y))
     g.rapid(z=work_z)
     if pullpush > 0:
@@ -877,11 +898,13 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     current_e           = 0.0
 
     # Z heights for each layer — configurable, with sensible defaults
-    copper_work_z    = configFile.get("copperWorkZ")
-    insulator_work_z = configFile.get("insulatorWorkZ")
-    crossover_work_z = configFile.get("crossoverWorkZ")
-    paste_work_z     = configFile.get("pasteWorkZ")
+    substrate_height = configFile.get("substrateHeight", 0)
+    copper_work_z    = configFile.get("copperWorkZ") + substrate_height
+    insulator_work_z = configFile.get("insulatorWorkZ") + substrate_height
+    crossover_work_z = configFile.get("crossoverWorkZ") + substrate_height
+    paste_work_z     = configFile.get("pasteWorkZ") + substrate_height
     camera_work_z  = configFile.get("cameraWorkZ", 0)
+    hop_z          = substrate_height + 5  # safe travel height above the substrate
 
     print_feed_rate = configFile.get("printFeedRate", 3600)
     trace_edge_inset = configFile.get("traceEdgeInset", 0.05)
@@ -1059,7 +1082,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
                 # ── PRIME LEAD SCREW ──────────────────────────────────
                 if enable_purge:
-                    prime_lead_screw(g, work_z=copper_work_z)
+                    prime_lead_screw(g, work_z=copper_work_z, lift_z=substrate_height + 5.5)
 
                 if raw_segments:
                     print(f"  extracted {len(raw_segments)} trace segments")
@@ -1073,7 +1096,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         current_e = points_to_gcode_path(
                             g, path, current_e, flow_rate, layer_height,
                             min_trace_width, enable_extrusion, use_arc_moves,
-                            work_z=copper_work_z, pullpush=global_pullpush, pullpush_speed=global_pullpush_speed
+                            work_z=copper_work_z, pullpush=global_pullpush, pullpush_speed=global_pullpush_speed, lift_z=hop_z
                         )
                         if enable_extrusion:
                             current_e -= retraction_distance
@@ -1086,14 +1109,14 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     for px, py, size, shape in pads:
                         if shape == 'C':
                             circles = generate_pad_spiral(px, py, size / 2, nozzle_size, use_arc_moves=use_arc_moves)
-                            g.rapid(z=5)
+                            g.rapid(z=hop_z)
                             g.rapid(point=(circles[0][0], circles[0][1]))
                             g.rapid(z=copper_work_z)
                             last_x, last_y = circles[0][0], circles[0][1]
                             for cx, cy, new_circle, arc_i, arc_j in circles:
                                 if new_circle:
                                     g.move(e=-global_pullpush, f=global_pullpush_speed)
-                                    g.rapid(z=5)
+                                    g.rapid(z=hop_z)
                                     g.rapid(point=(cx, cy))
                                     g.rapid(z=copper_work_z)
                                     g.move(e=global_pullpush, f=global_pullpush_speed)
@@ -1104,14 +1127,14 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                 else:
                                     current_e = move_with_extrusion(g, cx, cy, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
                                     last_x, last_y = cx, cy
-                            g.rapid(z=5)
+                            g.rapid(z=hop_z)
                         else:
                             all_rects = generate_pad_raster(px, py, size, nozzle_size, shape=shape)
                             for rect_segments in all_rects:
                                 if not rect_segments:
                                     continue
                                 g.move(e=-global_pullpush, f=global_pullpush_speed)
-                                g.rapid(z=5)
+                                g.rapid(z=hop_z)
                                 g.rapid(point=(rect_segments[0][0], rect_segments[0][1]))
                                 g.rapid(z=copper_work_z)
                                 g.move(e=global_pullpush, f=global_pullpush_speed)
@@ -1169,19 +1192,19 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 paste_scale       = configFile.get("pasteScale", 0.9)
                 pads, _, _   = extract_coords(gbr_path, offset_x=global_offset_x, offset_y=global_offset_y)
                 if enable_tool_change:
-                    g.write(f"T{paste_head.get('toolNumber', 2)} ; paste head")
+                    g.write(f"T{paste_head.get('toolNumber', 1)} ; paste head")
                 print(f"  extracted {len(pads)} paste pads")
 
                 # ── PRIME LEAD SCREW ──────────────────────────────────
                 if enable_purge:
-                    prime_lead_screw(g, work_z=paste_work_z, extrude_amount=40, prime_cycles=10)
+                    prime_lead_screw(g, work_z=paste_work_z, extrude_amount=40, prime_cycles=10, lift_z=substrate_height + 5.5)
 
                 for px, py, size, shape in pads:
                     drawn = False
                     if shape == 'C':
                         circles = generate_pad_spiral(px, py, size / 2, paste_nozzle_size)
                         if circles:
-                            g.rapid(z=5)
+                            g.rapid(z=hop_z)
                             g.rapid(point=(circles[0][0], circles[0][1]))
                             g.rapid(z=paste_work_z)
                             g.move(e=paste_pullpush, f=paste_pullpush_speed)
@@ -1189,7 +1212,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                             for cx2, cy2, new_circle, _, _ in circles:
                                 if new_circle and not first:
                                     g.move(e=-paste_pullpush, f=paste_pullpush_speed)
-                                    g.rapid(z=5)
+                                    g.rapid(z=hop_z)
                                     g.rapid(point=(cx2, cy2))
                                     g.rapid(z=paste_work_z)
                                     g.move(e=paste_pullpush, f=paste_pullpush_speed)
@@ -1225,7 +1248,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         for rect_segments in all_rects:
                             if not rect_segments:
                                 continue
-                            g.rapid(z=5)
+                            g.rapid(z=hop_z)
                             g.rapid(point=(rect_segments[0][0], rect_segments[0][1]))
                             g.rapid(z=paste_work_z)
                             g.move(e=paste_pullpush, f=paste_pullpush_speed)
@@ -1235,18 +1258,18 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                             g.move(e=-paste_pullpush, f=paste_pullpush_speed)
                             drawn = True
                         # if drawn:
-                        #     g.rapid(z=5)
+                        #     g.rapid(z=hop_z)
                     if not drawn:
                         # pad too small to raster with this nozzle — fall back to dot dispense
                         pad_area = math.pi * (size/2)**2 if shape == 'C' else size * size
                         dwell_ms = int(pad_area * dwell_factor * 1000)
-                        g.rapid(z=5)
+                        g.rapid(z=hop_z)
                         g.rapid(point=(px, py))
                         g.rapid(z=paste_work_z)
                         g.move(e=paste_pullpush, f=paste_pullpush_speed)
                         g.write(f"G4 P{dwell_ms} ; dispense paste")
                         g.move(e=-paste_pullpush, f=paste_pullpush_speed)
-                        # g.rapid(z=5)
+                        # g.rapid(z=hop_z)
 
             elif layer_type == "insulator":
                 ins_nozzle_size  = insulator_head.get("nozzleSize", 0.225)
@@ -1261,7 +1284,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 pads, _, _ = extract_coords(gbr_path, offset_x=global_offset_x, offset_y=global_offset_y)
 
                 if enable_tool_change:
-                    g.write(f"T{insulator_head.get('toolNumber', 1)} ; insulator head")
+                    g.write(f"T{insulator_head.get('toolNumber', 4)} ; insulator head")
 
                 if raw_segments:
                     print(f"  extracted {len(raw_segments)} insulator trace segments")
@@ -1273,7 +1296,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         current_e = points_to_gcode_path(
                             g, path, current_e, ins_flow_rate, ins_layer_height,
                             ins_trace_width, enable_extrusion, use_arc_moves,
-                            work_z=insulator_work_z, pullpush=global_pullpush, pullpush_speed=global_pullpush_speed
+                            work_z=insulator_work_z, pullpush=global_pullpush, pullpush_speed=global_pullpush_speed, lift_z=hop_z
                         )
                         if enable_extrusion:
                             current_e -= retraction_distance
@@ -1284,14 +1307,14 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     for px, py, size, shape in pads:
                         if shape == 'C':
                             circles = generate_pad_spiral(px, py, size / 2, ins_nozzle_size, use_arc_moves=use_arc_moves)
-                            g.rapid(z=5)
+                            g.rapid(z=hop_z)
                             g.rapid(point=(circles[0][0], circles[0][1]))
                             g.rapid(z=insulator_work_z)
                             last_x, last_y = circles[0][0], circles[0][1]
                             for cx, cy, new_circle, arc_i, arc_j in circles:
                                 if new_circle:
                                     g.move(e=-global_pullpush, f=global_pullpush_speed)
-                                    g.rapid(z=5)
+                                    g.rapid(z=hop_z)
                                     g.rapid(point=(cx, cy))
                                     g.rapid(z=insulator_work_z)
                                     g.move(e=global_pullpush, f=global_pullpush_speed)
@@ -1302,14 +1325,14 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                 else:
                                     current_e = move_with_extrusion(g, cx, cy, last_x, last_y, current_e, ins_flow_rate, ins_layer_height, ins_trace_width, enable_extrusion)
                                     last_x, last_y = cx, cy
-                            g.rapid(z=5)
+                            g.rapid(z=hop_z)
                         else:
                             all_rects = generate_pad_raster(px, py, size, ins_nozzle_size, shape=shape)
                             for rect_segments in all_rects:
                                 if not rect_segments:
                                     continue
                                 g.move(e=-global_pullpush, f=global_pullpush_speed)
-                                g.rapid(z=5)
+                                g.rapid(z=hop_z)
                                 g.rapid(point=(rect_segments[0][0], rect_segments[0][1]))
                                 g.rapid(z=insulator_work_z)
                                 g.move(e=global_pullpush, f=global_pullpush_speed)
@@ -1375,7 +1398,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         current_e = points_to_gcode_path(
                             g, path, current_e, flow_rate, layer_height,
                             min_trace_width, enable_extrusion, use_arc_moves,
-                            work_z=crossover_work_z, pullpush=global_pullpush, pullpush_speed=global_pullpush_speed
+                            work_z=crossover_work_z, pullpush=global_pullpush, pullpush_speed=global_pullpush_speed, lift_z=hop_z
                         )
                         if enable_extrusion:
                             current_e -= retraction_distance
@@ -1386,14 +1409,14 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     for px, py, size, shape in pads:
                         if shape == 'C':
                             circles = generate_pad_spiral(px, py, size / 2, nozzle_size)
-                            g.rapid(z=5)
+                            g.rapid(z=hop_z)
                             g.rapid(point=(circles[0][0], circles[0][1]))
                             g.rapid(z=crossover_work_z)
                             last_x, last_y = circles[0][0], circles[0][1]
                             for cx, cy, new_circle, arc_i, arc_j in circles:
                                 if new_circle:
                                     g.move(e=-global_pullpush, f=global_pullpush_speed)
-                                    g.rapid(z=5)
+                                    g.rapid(z=hop_z)
                                     g.rapid(point=(cx, cy))
                                     g.rapid(z=crossover_work_z)
                                     g.move(e=global_pullpush, f=global_pullpush_speed)
@@ -1401,14 +1424,14 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                 else:
                                     current_e = move_with_extrusion(g, cx, cy, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
                                     last_x, last_y = cx, cy
-                            g.rapid(z=5)
+                            g.rapid(z=hop_z)
                         else:
                             all_rects = generate_pad_raster(px, py, size, nozzle_size, shape=shape)
                             for rect_segments in all_rects:
                                 if not rect_segments:
                                     continue
                                 g.move(e=-global_pullpush, f=global_pullpush_speed)
-                                g.rapid(z=5)
+                                g.rapid(z=hop_z)
                                 g.rapid(point=(rect_segments[0][0], rect_segments[0][1]))
                                 g.rapid(z=crossover_work_z)
                                 g.move(e=global_pullpush, f=global_pullpush_speed)
@@ -1446,7 +1469,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                      origin_y=sweep_origin_y)
 
         g.write("\n; --- END PRINT ---")
-        g.write("G28 X0 Y0 ; home X and Y")
+        g.write("G28 X Y ; home X and Y")
         g.write("M84 ; disable motors")
 
     # count lines and prepend total to file
