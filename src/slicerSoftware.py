@@ -289,7 +289,9 @@ def get_layer_type_from_filename(filename: str) -> str:
         return "copper_bottom"
     if any(x in f for x in ["insulator"]):
         return "insulator"
-    if any(x in f for x in ["paste_top", "f_paste", "top_paste", "gtp", "paste"]):
+    if any(x in f for x in ["paste_bottom", "b_paste", "bottom_paste", "gbp"]):
+        return "paste_bottom"
+    elif any(x in f for x in ["paste_top", "f_paste", "top_paste", "gtp", "paste"]):
         return "paste_top"
     if any(x in f for x in ["soldermask_top", "f_mask", "top_mask", "gts"]):
         return "mask_top"
