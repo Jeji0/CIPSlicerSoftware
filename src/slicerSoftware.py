@@ -624,7 +624,7 @@ def generate_pad_spiral(cx: float, cy: float, radius: float, nozzle_size: float,
 
     return points
 
-def generate_pad_raster(cx, cy, size, nozzle_size, shape='C', inset=None, fill_center=False):
+def generate_pad_raster(cx, cy, size, nozzle_size, shape='C', inset=None, fill_center=False, inset_y=None):
     """Fill pad with concentric rectangles, returned as separate paths."""
 
     if shape.startswith('RR:'):
@@ -639,8 +639,10 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C', inset=None, fill_c
     step   = nozzle_size * 1.5
     if inset is None:
         inset = nozzle_size / 2 + nozzle_size * 1.5  # pull first pass in so bead edge meets true pad boundary
+    if inset_y is None:
+        inset_y = inset
     half_w = max(width / 2 - inset, 0)
-    half_h = max(height / 2 - inset, 0)
+    half_h = max(height / 2 - inset_y, 0)
     all_rects = []
 
     num_layers = math.ceil(max(half_w, half_h) / step) + 1
@@ -1164,6 +1166,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 dwell_factor      = paste_head.get("dwellFactor", 0.5)
                 paste_nozzle_size = paste_head.get("nozzleSize", 0.3)
                 paste_feed_rate   = configFile.get("pasteFeedRate", 600)
+                paste_scale       = configFile.get("pasteScale", 0.9)
                 pads, _, _   = extract_coords(gbr_path, offset_x=global_offset_x, offset_y=global_offset_y)
                 if enable_tool_change:
                     g.write(f"T{paste_head.get('toolNumber', 2)} ; paste head")
@@ -1196,11 +1199,29 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                             g.move(e=-paste_pullpush, f=paste_pullpush_speed)
                             drawn = True
                     else:
-                        # tighter first-pass inset than conductive ink so the
-                        # paste bead edge lands on the aperture boundary
-                        all_rects = generate_pad_raster(px, py, size, paste_nozzle_size,
-                                                        shape=shape, inset=paste_nozzle_size / 2,
-                                                        fill_center=True)
+                        # scale the paste footprint to pasteScale x the
+                        # aperture in both axes (bead edge included), clamped
+                        # per pad so small apertures still draw
+                        pad_h = float(shape.split(':')[1]) if shape.startswith('RR:') else size
+                        if min(size, pad_h) <= paste_nozzle_size * 1.5:
+                            # pad too narrow for a loop — draw a single
+                            # centerline stripe of paste along the long axis
+                            if size >= pad_h:
+                                half_len = max(size * paste_scale / 2 - paste_nozzle_size / 2,
+                                               paste_nozzle_size / 4)
+                                all_rects = [[(px - half_len, py, px + half_len, py)]]
+                            else:
+                                half_len = max(pad_h * paste_scale / 2 - paste_nozzle_size / 2,
+                                               paste_nozzle_size / 4)
+                                all_rects = [[(px, py - half_len, px, py + half_len)]]
+                        else:
+                            inset_x = (size  * (1 - paste_scale) + paste_nozzle_size) / 2
+                            inset_y = (pad_h * (1 - paste_scale) + paste_nozzle_size) / 2
+                            inset_x = max(min(inset_x, size  / 2 - paste_nozzle_size / 4), paste_nozzle_size / 2)
+                            inset_y = max(min(inset_y, pad_h / 2 - paste_nozzle_size / 4), paste_nozzle_size / 2)
+                            all_rects = generate_pad_raster(px, py, size, paste_nozzle_size,
+                                                            shape=shape, inset=inset_x, inset_y=inset_y,
+                                                            fill_center=True)
                         for rect_segments in all_rects:
                             if not rect_segments:
                                 continue
