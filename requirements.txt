@@ -1,2 +1,4 @@
 pygerber==3.0.0a4
 gscrib==1.2.0
+shapely==2.1.2
+matplotlib==3.10.9
