@@ -1015,10 +1015,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
         if enable_tool_change:
             g.write("T0 ; conductive head")
 
-        # ── PRIME LEAD SCREW ──────────────────────────────────
-        if enable_purge:
-            prime_lead_screw(g, work_z=copper_work_z)
-
         layer_mode = configFile.get("layerMode", "single")
 
         for gbr_path, layer_type, is_bottom in files_to_process:
@@ -1038,6 +1034,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 if not enable_conductive:
                     print(f"  skipping {fname} (conductive ink disabled)")
                     continue
+                
                 min_trace_width = conductive_head.get("traceWidth", 0.225)
                 nozzle_size     = conductive_head.get("nozzleSize", 0.225)
                 flow_rate       = conductive_head.get("flowRate", 0.05)
@@ -1048,6 +1045,10 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     min_trace_width=min_trace_width
                 )
                 pads, _, _ = extract_coords(gbr_path, offset_x=global_offset_x, offset_y=global_offset_y)
+
+                # ── PRIME LEAD SCREW ──────────────────────────────────
+                if enable_purge:
+                    prime_lead_screw(g, work_z=copper_work_z)
 
                 if raw_segments:
                     print(f"  extracted {len(raw_segments)} trace segments")
@@ -1157,6 +1158,11 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 if enable_tool_change:
                     g.write(f"T{paste_head.get('toolNumber', 2)} ; paste head")
                 print(f"  extracted {len(pads)} paste pads")
+
+                # ── PRIME LEAD SCREW ──────────────────────────────────
+                if enable_purge:
+                    prime_lead_screw(g, work_z=paste_work_z, extrude_amount=40, prime_cycles=10)
+
                 for px, py, size, shape in pads:
                     drawn = False
                     if shape == 'C':
@@ -1178,7 +1184,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                     g.move(point=(cx2, cy2), f=paste_feed_rate)
                                 first = False
                             g.move(e=-paste_pullpush, f=paste_pullpush_speed)
-                            g.rapid(z=5)
                             drawn = True
                     else:
                         # tighter first-pass inset than conductive ink so the
@@ -1198,8 +1203,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                 g.move(point=(ex, ey))
                             g.move(e=-paste_pullpush, f=paste_pullpush_speed)
                             drawn = True
-                        if drawn:
-                            g.rapid(z=5)
+                        # if drawn:
+                        #     g.rapid(z=5)
                     if not drawn:
                         # pad too small to raster with this nozzle — fall back to dot dispense
                         pad_area = math.pi * (size/2)**2 if shape == 'C' else size * size
@@ -1210,7 +1215,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         g.move(e=paste_pullpush, f=paste_pullpush_speed)
                         g.write(f"G4 P{dwell_ms} ; dispense paste")
                         g.move(e=-paste_pullpush, f=paste_pullpush_speed)
-                        g.rapid(z=5)
+                        # g.rapid(z=5)
 
             elif layer_type == "insulator":
                 ins_nozzle_size  = insulator_head.get("nozzleSize", 0.225)
