@@ -93,5 +93,6 @@
     "cure_dry_seconds": 300.0,
     "cure_temp": 0.0,
     "cure_seconds": 0.0,
-    "retractionDistance": 0.5
+    "retractionDistance": 0.5,
+    "traceEdgeInset": 0.05
 }

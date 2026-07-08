@@ -37,7 +37,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Note: Conductor 3 — no burnishing needed, no flipping needed
 # Note: insulator cover type determines if stop is at layer 3.5 or 4
 
-def generate_shapely_toolpaths(raw_segments, nozzle_size, pads=None, stepover_ratio=0.85, subtract_rect_pads=False):
+def generate_shapely_toolpaths(raw_segments, nozzle_size, pads=None, stepover_ratio=0.85, subtract_rect_pads=False, edge_inset=0.0):
     """
     Merges overlapping trace segments and generates concentric fill paths.
     raw_segments: list of ((start_x, start_y), (end_x, end_y), trace_width)
@@ -101,7 +101,7 @@ def generate_shapely_toolpaths(raw_segments, nozzle_size, pads=None, stepover_ra
             merged_layer = merged_layer.difference(unary_union(subtract_polys))
 
     toolpaths = []
-    current_inset = nozzle_size / 2.0
+    current_inset = nozzle_size / 2.0 + edge_inset
     stepover_dist = nozzle_size * stepover_ratio
 
     first_pass = True
@@ -882,6 +882,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     camera_work_z  = configFile.get("cameraWorkZ", 0)
 
     print_feed_rate = configFile.get("printFeedRate", 3600)
+    trace_edge_inset = configFile.get("traceEdgeInset", 0.05)
 
     camera_head        = get_head(configFile, "camera")
     camera_tool_number = camera_head.get("toolNumber", 2)
@@ -1061,7 +1062,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 if raw_segments:
                     print(f"  extracted {len(raw_segments)} trace segments")
                     layer_toolpaths = generate_shapely_toolpaths(raw_segments, min_trace_width, pads=pads,
-                                                                 subtract_rect_pads=ink_traces_only)
+                                                                 subtract_rect_pads=ink_traces_only,
+                                                                 edge_inset=trace_edge_inset)
                     layer_toolpaths = order_paths_nearest(layer_toolpaths)
                     for path in layer_toolpaths:
                         if not path or len(path) < 2:
@@ -1343,7 +1345,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
                 if raw_segments:
                     print(f"  extracted {len(raw_segments)} crossover trace segments")
-                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, min_trace_width, pads=pads)
+                    layer_toolpaths = generate_shapely_toolpaths(raw_segments, min_trace_width, pads=pads,
+                                                                 edge_inset=trace_edge_inset)
                     layer_toolpaths = order_paths_nearest(layer_toolpaths)
                     for path in layer_toolpaths:
                         if not path or len(path) < 2:
