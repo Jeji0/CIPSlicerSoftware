@@ -214,6 +214,11 @@ def validate_config(config: dict) -> None:
     if not config.get("gerberFile", ""):
         errors.append("gerberFile path is missing from config")
 
+    for z_key in ("copperWorkZ", "insulatorWorkZ", "crossoverWorkZ", "pasteWorkZ"):
+        v = config.get(z_key)
+        if not isinstance(v, (int, float)):
+            errors.append(f"{z_key} must be a number (got {v!r})")
+
     if config.get("layerMode", "single") not in ["single", "multi"]:
         errors.append("layerMode must be 'single' or 'multi'")
 
@@ -905,7 +910,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     insulator_work_z = configFile.get("insulatorWorkZ") + substrate_height
     crossover_work_z = configFile.get("crossoverWorkZ") + substrate_height
     paste_work_z     = configFile.get("pasteWorkZ") + substrate_height
-    camera_work_z  = configFile.get("cameraWorkZ", 0)
+    camera_work_z  = configFile.get("cameraWorkZ", 50) + substrate_height
     hop_clearance  = configFile.get("hopClearance", 5)  # travel lift above each head's work height
     copper_hop_z    = copper_work_z    + hop_clearance
     insulator_hop_z = insulator_work_z + hop_clearance
