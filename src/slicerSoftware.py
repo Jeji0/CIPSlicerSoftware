@@ -1170,9 +1170,9 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     cure_temp        = conductive_head.get("cureTemp", 170)
                     cure_seconds     = conductive_head.get("cureSeconds", 900)
                     g.write(f"M190 S{cure_dry_temp}")
-                    g.sleep(cure_dry_seconds)
+                    g.write("G4 S300 ; stage 1: dry")
                     g.write(f"M190 S{cure_temp}")
-                    g.sleep(cure_seconds)
+                    g.write("G4 S900 ; stage 2: cure")
                     g.write("M190 S0")
                     g.write("G4 S1800 ; cool-down wait 30 min")
 
@@ -1299,7 +1299,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         g.move(e=paste_pullpush, f=paste_pullpush_speed)
                         g.write(f"G4 P{dwell_ms} ; dispense paste")
                         g.move(e=-paste_pullpush, f=paste_pullpush_speed)
-                        # g.rapid(z=paste_hop_z)
+                        #g.rapid(z=paste_hop_z)
 
             elif layer_type == "insulator":
                 ins_nozzle_size  = insulator_head.get("nozzleSize", 0.225)
