@@ -872,6 +872,7 @@ def prime_lead_screw(g, lift_z=5.5, work_z=0.2, extrude_amount=20, extrude_feed=
     """
     print("Priming lead screw...")
     g.write(f"G0 Z{lift_z} F20000 ; lift Z for lead screw engagement")
+    g.write("G0 X1 Y1")
     g.write(f"G1 E{extrude_amount} F{extrude_feed} ; initial piston seat")
 
     for i in range(prime_cycles):
@@ -1514,7 +1515,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                      origin_y=sweep_origin_y)
 
         g.write("\n; --- END PRINT ---")
-        g.write("G28 X Y ; home X and Y")
+        g.write("G28 X0 Y0 ; home X and Y")
         g.write("M84 ; disable motors")
 
     # count lines and prepend total to file
