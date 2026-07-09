@@ -94,7 +94,7 @@
     "cure_temp": 170.0,
     "cure_seconds": 900.0,
     "retractionDistance": 0.5,
-    "traceEdgeInset": 0.05,
+    "traceEdgeInset": 0.01,
     "pasteScale": 0.9,
     "substrateHeight": 1.0,
     "hopClearance": 5
