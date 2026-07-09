@@ -23,8 +23,8 @@ def load_config_into_fields(fields):
         with open(config_path, "r") as f:
             config = json.load(f)
 
-        fields["layerHeight"].delete(0, tk.END)
-        fields["layerHeight"].insert(0, config.get("layerHeight", 0.2))
+        fields["substrateHeight"].delete(0, tk.END)
+        fields["substrateHeight"].insert(0, config.get("substrateHeight", 0.2))
 
         fields["printSpeed"].delete(0, tk.END)
         fields["printSpeed"].insert(0, config.get("printSpeed", 60))
@@ -126,7 +126,7 @@ def save_settings(fields, output):
         return
     try:
         updates = {
-            "layerHeight": float(fields["layerHeight"].get()),
+            "substrateHeight": float(fields["substrateHeight"].get()),
             "printSpeed": float(fields["printSpeed"].get()),
             "maxBedSize": [
                 float(fields["bedX"].get()),
@@ -365,7 +365,7 @@ def validate_fields(fields):
     """Highlight fields red if invalid, green if valid. Returns True if all valid."""
     valid = True
     numeric_fields = [
-        "layerHeight", "printSpeed", "bedX", "bedY", "bedZ",
+        "substrateHeight", "printSpeed", "bedX", "bedY", "bedZ",
         "nozzleSize", "cureDryTemp", "cureDrySeconds",
         "cureTemp", "cureSeconds", "printFeedRate"
     ]
@@ -413,7 +413,7 @@ def GUI():
                          font=("Helvetica", 11, "bold"), padx=12, pady=8)
     left.grid(row=1, column=0, sticky="nsew", padx=(12, 6), pady=10)
 
-    make_field_row(left, 0, "Layer height (mm)", "layerHeight", fields)
+    make_field_row(left, 0, "Substrate height (mm)", "substrateHeight", fields)
     make_field_row(left, 1, "Print speed (mm/s)", "printSpeed", fields)
     make_field_row(left, 2, "Bed size X (mm)", "bedX", fields)
     make_field_row(left, 3, "Bed size Y (mm)", "bedY", fields)
