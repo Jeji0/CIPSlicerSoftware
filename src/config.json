@@ -96,5 +96,6 @@
     "retractionDistance": 0.5,
     "traceEdgeInset": 0.05,
     "pasteScale": 0.9,
-    "substrateHeight": 0
+    "substrateHeight": 0,
+    "hopClearance": 5
 }
