@@ -126,11 +126,11 @@ printProp = {
     "pasteWorkZ": 0.6,
     "insulatorWorkZ": 0.4,
     "crossoverWorkZ": 0.6,
-    "traceEdgeInset": 0.05,
-}
+    "traceEdgeInset": 0.05
+}}
 
 filePath = {
-    "gerberFile": "TestFiles/test-gbr.zip",
+    "gerberFile": "TestFiles/test-gbr.zip"
 }
 
 def updConf(input):
