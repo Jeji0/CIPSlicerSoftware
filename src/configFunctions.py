@@ -43,6 +43,9 @@ printProp = {
     "insulator_head_offset_y": 0,
     "copperWorkZ": 0.4,
     "pasteWorkZ": 0.6,
+    "insulatorWorkZ": 0.4,
+    "crossoverWorkZ": 0.6,
+    "traceEdgeInset": 0.05,
 }
 
 filePath = {

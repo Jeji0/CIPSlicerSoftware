@@ -52,7 +52,12 @@ def generate_shapely_toolpaths(raw_segments, nozzle_size, pads=None, stepover_ra
     trace_polys = []
     for (sx, sy), (ex, ey), width in raw_segments:
         line = LineString([(sx, sy), (ex, ey)])
-        poly = line.buffer(width / 2.0, cap_style=1, join_style=1)
+        buffer_amount = 0.05
+        if (width / 2.0 - edge_inset >= 0.01):
+            buffer_amount = width / 2.0 - edge_inset
+        else:
+            buffer_amount = 0.01
+        poly = line.buffer(buffer_amount, cap_style=1, join_style=1)
         trace_polys.append(poly)
 
     merged_layer = unary_union(trace_polys)
@@ -105,21 +110,21 @@ def generate_shapely_toolpaths(raw_segments, nozzle_size, pads=None, stepover_ra
     stepover_dist = nozzle_size * stepover_ratio
 
     first_pass = True
-    while True:
-        path_geo = merged_layer.buffer(-current_inset, join_style=2)
-        if first_pass and pads and union_polys:
-            # after the seamless outer pass, exclude rect pad interiors (raster fills them)
-            merged_layer = merged_layer.difference(unary_union(union_polys))
-            first_pass = False
-        if path_geo.is_empty:
-            break
-        geoms = path_geo.geoms if hasattr(path_geo, 'geoms') else [path_geo]
-        for geom in geoms:
-            if isinstance(geom, Polygon):
-                toolpaths.append(list(geom.exterior.coords))
-                for interior in geom.interiors:
-                    toolpaths.append(list(interior.coords))
-        current_inset += stepover_dist
+    # while True:
+    #     path_geo = merged_layer #.buffer(-current_inset, join_style=2)
+    #     if first_pass and pads and union_polys:
+    #         # after the seamless outer pass, exclude rect pad interiors (raster fills them)
+    #         merged_layer = merged_layer.difference(unary_union(union_polys))
+    #         first_pass = False
+    #     if path_geo.is_empty:
+    #         break
+    geoms = merged_layer.geoms if hasattr(merged_layer, 'geoms') else [merged_layer]
+    for geom in geoms:
+        if isinstance(geom, Polygon):
+            toolpaths.append(list(geom.exterior.coords))
+            for interior in geom.interiors:
+                toolpaths.append(list(interior.coords))
+    #     current_inset += stepover_dist
 
     return toolpaths
 
@@ -883,7 +888,7 @@ def prime_lead_screw(g, lift_z=5.5, work_z=0.2, extrude_amount=20, extrude_feed=
 
     "Jerk the excess ink away"
     g.rapid(z=work_z)
-    g.move(x=2)
+    g.move(x=10)
     g.rapid(z=lift_z)
     print("Lead screw primed")
 
