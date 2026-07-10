@@ -23,14 +23,95 @@ defLayHei = unitConv(0.2, defUnits)
 defPriSpe = unitConv(60, defUnits)
 
 printProp = {
-    "units": defUnits,
-    "maxBedSize": defMaxBed,
-    "layerHeight": defLayHei,
-    "printSpeed": defPriSpe,
+    {
+    "units": "mm",
+    "maxBedSize": [
+        220.0,
+        220.0,
+        250.0
+    ],
+    "layerHeight": 0.2,
+    "conductiveLayerHeight": 0.3,
+    "insulatorLayerHeight": 0.2,
+    "copperWorkZ": 14.8,
+    "insulatorWorkZ": 0.4,
+    "crossoverWorkZ": 0.6,
+    "pasteWorkZ": 46.5,
+    "cameraWorkZ": 54,
+    "boardThickness": 1,
+    "printHeightOffset": 0.5,
     "layerMode": "single",
+    "printSpeed": 60.0,
+    "printFeedRate": 3600.0,
+    "gerberFile": "TestFiles/NE555Circuit5.zip",
+    "gerberJobFile": "",
     "steps_per_mm_x": 80,
     "steps_per_mm_y": 80,
     "steps_per_mm_z": 400,
+    "pullpush": 2.0,
+    "pullpush_speed": 500,
+    "paste_pullpush": 1.0,
+    "paste_pullpush_speed": 300,
+    "activeHeads": [
+        "conductor3",
+        "si3104",
+        "paste",
+        "camera"
+    ],
+    "heads": [
+        {
+            "id": "conductor3",
+            "name": "Voltera Conductor 3",
+            "type": "conductive",
+            "toolNumber": 0,
+            "nozzleSize": 0.2032,
+            "traceWidth": 0.2032,
+            "cureDryTemp": 90,
+            "cureDrySeconds": 300,
+            "cureTemp": 170,
+            "cureSeconds": 900,
+            "flowRate": 0.05,
+            "layerHeight": 0.2,
+            "flowScaleByWidth": true
+        },
+        {
+            "id": "si3104",
+            "name": "ACI SI3104 Insulator",
+            "type": "insulator",
+            "toolNumber": 4,
+            "nozzleSize": 0.225,
+            "traceWidth": 0.225,
+            "cureTemp": 135,
+            "cureSeconds": 600,
+            "offsetX": 0,
+            "offsetY": 0,
+            "flowRate": 0.04,
+            "layerHeight": 0.2,
+            "flowScaleByWidth": true
+        },
+        {
+            "id": "paste",
+            "name": "Solder Paste",
+            "type": "paste",
+            "toolNumber": 1,
+            "nozzleSize": 0.3,
+            "dwellFactor": 0.5,
+            "cureTemp": 0,
+            "cureSeconds": 0
+        },
+        {
+            "id": "camera",
+            "name": "Camera Head",
+            "type": "camera",
+            "toolNumber": 2
+        },
+        {
+            "id": "nc/pen",
+            "name": "NC/Pen Head",
+            "type": "nc/pen",
+            "toolNumber": 3
+        }
+    ],
     "nozzleSize": 0.2,
     "traceWidth": 0.25,
     "cure_dry_temp": 90,
