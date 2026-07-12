@@ -1,0 +1,24 @@
+{
+    "Header": {
+        "Comment": "All values are metric (mm)",
+        "CreationDate": "2025-03-05T02:01:43Z",
+        "GenerationSoftware": {
+            "Application": "Fusion Electronics",
+            "Vendor": "Autodesk",
+            "Version": "9.7.0"
+        },
+        "Part": "Single"
+    },
+    "Overall": {
+        "BoardThickness": 1.57,
+        "LayerNumber": 2,
+        "Name": {
+            "ProjectId": "PCB v7"
+        },
+        "Owner": "Andrew Eppich <an067171@ucf.edu>",
+        "Size": {
+            "X": 27.92,
+            "Y": 19.99
+        }
+    }
+}

@@ -370,7 +370,7 @@ def validate_fields(fields):
         "cureTemp", "cureSeconds", "printFeedRate"
     ]
 
-    zero_ok = {"cureDryTemp", "cureDrySeconds", "cureTemp", "cureSeconds"}
+    zero_ok = {"cureDryTemp", "cureDrySeconds", "cureTemp", "cureSeconds", "substrateHeight"}
     for key in numeric_fields:
         entry = fields[key]
         try:

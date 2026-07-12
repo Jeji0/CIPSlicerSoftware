@@ -12,7 +12,7 @@
     "insulatorWorkZ": 0.4,
     "crossoverWorkZ": 0.6,
     "pasteWorkZ": 46.5,
-    "cameraWorkZ": 54,
+    "cameraWorkZ": 50,
     "boardThickness": 1,
     "printHeightOffset": 0.5,
     "layerMode": "single",
@@ -87,15 +87,16 @@
             "toolNumber": 3
         }
     ],
-    "nozzleSize": 0.2,
+    "nozzleSize": 0.19,
     "traceWidth": 0.2,
     "cure_dry_temp": 90.0,
     "cure_dry_seconds": 300.0,
     "cure_temp": 170.0,
     "cure_seconds": 900.0,
     "retractionDistance": 0.5,
-    "traceEdgeInset": 0.01,
+    "traceEdgeInset": 0.05,
     "pasteScale": 0.9,
-    "substrateHeight": 1.0,
-    "hopClearance": 5
+    "substrateHeight": 0.0,
+    "hopClearance": 5,
+    "pasteDotE": 20
 }
