@@ -23,13 +23,8 @@ defLayHei = unitConv(0.2, defUnits)
 defPriSpe = unitConv(60, defUnits)
 
 printProp = {
-    {
     "units": "mm",
-    "maxBedSize": [
-        220.0,
-        220.0,
-        250.0
-    ],
+    "maxBedSize": [220.0, 220.0, 250.0],
     "layerHeight": 0.2,
     "conductiveLayerHeight": 0.3,
     "insulatorLayerHeight": 0.2,
@@ -52,12 +47,7 @@ printProp = {
     "pullpush_speed": 500,
     "paste_pullpush": 1.0,
     "paste_pullpush_speed": 300,
-    "activeHeads": [
-        "conductor3",
-        "si3104",
-        "paste",
-        "camera"
-    ],
+    "activeHeads": ["conductor3", "si3104", "paste", "camera"],
     "heads": [
         {
             "id": "conductor3",
@@ -72,7 +62,7 @@ printProp = {
             "cureSeconds": 900,
             "flowRate": 0.05,
             "layerHeight": 0.2,
-            "flowScaleByWidth": true
+            "flowScaleByWidth": True
         },
         {
             "id": "si3104",
@@ -87,7 +77,7 @@ printProp = {
             "offsetY": 0,
             "flowRate": 0.04,
             "layerHeight": 0.2,
-            "flowScaleByWidth": true
+            "flowScaleByWidth": True
         },
         {
             "id": "paste",
@@ -122,13 +112,12 @@ printProp = {
     "insulator_cure_seconds": 600,
     "insulator_head_offset_x": 0,
     "insulator_head_offset_y": 0,
-    "copperWorkZ": 0.4,
-    "pasteWorkZ": 0.6,
-    "insulatorWorkZ": 0.4,
-    "crossoverWorkZ": 0.6,
-    "traceEdgeInset": 0.05
-}}
-
+    "retractionDistance": 0.5,
+    "traceEdgeInset": 0.05,
+    "pasteScale": 0.9,
+    "substrateHeight": 0,
+    "hopClearance": 5
+}
 filePath = {
     "gerberFile": "TestFiles/test-gbr.zip"
 }
