@@ -712,8 +712,8 @@ def camera_sweep(g, safe_z:float=CAMERA_SAFE_Z_DEFAULT, board_size_x: float = 0,
     """Camera sweep after each ink + cure sequence."""
     print(f"  camera sweep layer {layer_index} — board {board_size_x:.1f}x{board_size_y:.1f}mm")
 
-    g.write("G28 ; home all axes")
     g.write(f"T{camera_head_tool} ; camera head")
+    g.write("G28 ; home all axes")
     g.write(f"M118 START_LAYER {layer_index}")
 
     num_rows    = max(1, math.ceil(board_size_y / row_spacing)) + 1
@@ -1197,6 +1197,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 pads, _, _   = extract_coords(gbr_path, offset_x=global_offset_x, offset_y=global_offset_y)
                 if enable_tool_change:
                     g.write(f"T{paste_head.get('toolNumber', 1)} ; paste head")
+                    g.write("G28 ; home all axes")
                 print(f"  extracted {len(pads)} paste pads")
 
                 # ── PRIME LEAD SCREW ──────────────────────────────────
