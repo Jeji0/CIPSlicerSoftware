@@ -23,18 +23,12 @@ defLayHei = unitConv(0.2, defUnits)
 defPriSpe = unitConv(60, defUnits)
 
 printProp = {
-    "units": "mm",
     "maxBedSize": [220.0, 220.0, 250.0],
-    "layerHeight": 0.2,
-    "conductiveLayerHeight": 0.3,
-    "insulatorLayerHeight": 0.2,
     "copperWorkZ": 14.8,
     "insulatorWorkZ": 0.4,
     "crossoverWorkZ": 0.6,
     "pasteWorkZ": 46.5,
     "cameraWorkZ": 54,
-    "boardThickness": 1,
-    "printHeightOffset": 0.5,
     "layerMode": "single",
     "printSpeed": 60.0,
     "printFeedRate": 3600.0,
@@ -85,7 +79,6 @@ printProp = {
             "type": "paste",
             "toolNumber": 1,
             "nozzleSize": 0.3,
-            "dwellFactor": 0.5,
             "cureTemp": 0,
             "cureSeconds": 0
         },
@@ -102,21 +95,11 @@ printProp = {
             "toolNumber": 3
         }
     ],
-    "nozzleSize": 0.2,
-    "traceWidth": 0.25,
-    "cure_dry_temp": 90,
-    "cure_dry_seconds": 300,
-    "cure_temp": 170,
-    "cure_seconds": 900,
-    "insulator_cure_temp": 135,
-    "insulator_cure_seconds": 600,
-    "insulator_head_offset_x": 0,
-    "insulator_head_offset_y": 0,
     "retractionDistance": 0.5,
     "traceEdgeInset": 0.05,
-    "pasteScale": 0.9,
     "substrateHeight": 0,
-    "hopClearance": 5
+    "hopClearance": 5,
+    "pasteDotE": 20
 }
 filePath = {
     "gerberFile": "TestFiles/test-gbr.zip"

@@ -8,16 +8,56 @@ from shapely.geometry import Point
 from pygerber.gerber.api import GerberFile, GerberJobFile
 from gscrib import GCodeBuilder
 
-from shapely.geometry import LineString, Polygon, MultiPolygon
-from shapely.ops import unary_union, linemerge
+from shapely.geometry import LineString, Polygon
+from shapely.ops import unary_union
 
-from shapely.strtree import STRtree
 
 GERBER_EXTENSIONS = {".gbr", ".gtl", ".gbl", ".gts", ".gbs", ".gto",
                      ".gbo", ".gtp", ".gbp", ".gko", ".ger"}
 
 # absolute path to the src/ folder so all file paths work regardless of where you run the script
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# ═══════════════════════════════════════════════════════════════════════
+#  TUNABLE CONSTANTS — machine and process values not exposed in config.json.
+#  Change them here; everything below references these names.
+#  (Per-print values like work heights, nozzle sizes, and pasteDotE live in
+#   config.json / the GUI, not here.)
+# ═══════════════════════════════════════════════════════════════════════
+
+# default nozzle size (mm) used only when config.json lacks a head definition
+DEFAULT_NOZZLE = 0.2
+
+# ── board placement ──
+BOARD_MARGIN = 2.0            # mm gap between machine origin and board min corner
+
+# ── end-of-ink-layer behavior ──
+INK_FINAL_PULL_E    = 400     # big E pull to fully stop ink flow after a layer
+INK_FINAL_PULL_FEED = 200     # feed rate for that pull (mm/min)
+PARK_X, PARK_Y, PARK_Z = 0, -20, 150   # where the head parks during cure/heating
+COOLDOWN_WAIT_S = 1800        # post-cure cool-down dwell (30 min)
+
+# ── extrusion-mode retract ──
+RETRACT_FEED = 1800           # feed rate for the retraction move after each path
+
+# ── prime (purge) sequence defaults — see prime_lead_screw() ──
+PRIME_LIFT_Z      = 5.5       # Z lift for lead screw engagement (relative baseline)
+PRIME_EXTRUDE     = 20        # E amount per prime push
+PRIME_FEED        = 200       # feed rate of prime pushes (mm/min)
+PRIME_CYCLES      = 20        # number of mini-extrude cycles
+PRIME_CYCLE_DELAY = 2.5       # seconds between cycles
+PRIME_SETTLE_S    = 10        # settle wait after priming
+PRIME_TRAVEL_FEED = 20000     # rapid feed for the initial prime lift
+
+# ── camera sweep ──
+CAMERA_SAFE_Z_DEFAULT = 50.0  # fallback camera height if not passed in
+CAMERA_GRID_SPACING   = 2.5   # mm between capture points (rows and columns)
+CAMERA_SETTLE_S       = 3     # dwell before the very first capture of a sweep
+
+# ── G2/G3 arc fitting (use_arc_moves) ──
+ARC_TOLERANCE   = 0.002       # max deviation (mm) for points to count as an arc
+ARC_MIN_POINTS  = 5           # min consecutive points before attempting a fit
+ARC_MAX_WINDOW  = 20          # max points considered per arc
 
 # ── LAYER ORDER ──────────────────────────────────────────────
 # Layer 1    - Conductive ink (Conductor 3, face up)       Z=0.2
@@ -49,36 +89,18 @@ def generate_shapely_toolpaths(raw_segments, nozzle_size, pads=None, stepover_ra
     if not raw_segments:
         return []
 
-    # tiered narrow-trace handling (boundaries scale with nozzle size):
-    #   width <= 1.25x nozzle (8/10 mil @ 8mil nozzle) -> single centerline pass
-    #   width <= 1.5x nozzle  (12 mil @ 8mil nozzle)   -> two overlapped passes:
-    #       filling at edge_inset=0 yields a loop at +/-(width-nozzle)/2,
-    #       i.e. two nozzle-wide beads overlapping by (2*nozzle - width)
-    #   wider                                          -> normal inset fill
-    centerline_segs = set()
-    narrow_fill_segs = []
-    for (sx, sy), (ex, ey), width in raw_segments:
-        if width <= nozzle_size * 1.25 + 1e-9:
-            # normalize direction so duplicate/reversed segments dedupe
-            centerline_segs.add(((sx, sy), (ex, ey)) if (sx, sy) <= (ex, ey) else ((ex, ey), (sx, sy)))
-        elif edge_inset > 0 and width <= nozzle_size * 1.5 + 1e-9:
-            narrow_fill_segs.append(((sx, sy), (ex, ey), width))
-    centerline_segs = list(centerline_segs)
-
-    # the main fill polygon is built only from segments not handled by the
-    # centerline / two-pass tiers, so narrow traces aren't drawn twice
-    fill_segments = [((sx, sy), (ex, ey), width)
-                     for (sx, sy), (ex, ey), width in raw_segments
-                     if width > nozzle_size * 1.25 + 1e-9
-                     and not (edge_inset > 0 and width <= nozzle_size * 1.5 + 1e-9)]
-
     trace_polys = []
-    for (sx, sy), (ex, ey), width in fill_segments:
+    for (sx, sy), (ex, ey), width in raw_segments:
         line = LineString([(sx, sy), (ex, ey)])
-        poly = line.buffer(width / 2.0, cap_style=1, join_style=1)
+        buffer_amount = 0.05
+        if (width / 2.0 - edge_inset >= 0.01):
+            buffer_amount = width / 2.0 - edge_inset
+        else:
+            buffer_amount = 0.01
+        poly = line.buffer(buffer_amount, cap_style=1, join_style=1)
         trace_polys.append(poly)
 
-    merged_layer = unary_union(trace_polys) if trace_polys else Polygon()
+    merged_layer = unary_union(trace_polys)
 
     # subtract pad areas so traces stop flush at pad boundaries
     if pads:
@@ -128,36 +150,27 @@ def generate_shapely_toolpaths(raw_segments, nozzle_size, pads=None, stepover_ra
     stepover_dist = nozzle_size * stepover_ratio
 
     first_pass = True
-    while True:
-        path_geo = merged_layer.buffer(-current_inset, join_style=2)
-        if first_pass and pads and union_polys:
-            # after the seamless outer pass, exclude rect pad interiors (raster fills them)
-            merged_layer = merged_layer.difference(unary_union(union_polys))
-            first_pass = False
-        if path_geo.is_empty:
-            break
-        geoms = path_geo.geoms if hasattr(path_geo, 'geoms') else [path_geo]
-        for geom in geoms:
-            if isinstance(geom, Polygon):
-                toolpaths.append(list(geom.exterior.coords))
-                for interior in geom.interiors:
-                    toolpaths.append(list(interior.coords))
-        current_inset += stepover_dist
-
-    if centerline_segs:
-        merged_lines = linemerge([LineString([s, e]) for s, e in centerline_segs])
-        line_geoms = merged_lines.geoms if hasattr(merged_lines, 'geoms') else [merged_lines]
-        for line in line_geoms:
-            toolpaths.append(list(line.coords))
-
-    if narrow_fill_segs:
-        # two-pass overlapped fill (e.g. 12 mil with an 8 mil nozzle)
-        toolpaths.extend(generate_shapely_toolpaths(
-            narrow_fill_segs, nozzle_size, pads=pads, stepover_ratio=stepover_ratio,
-            subtract_rect_pads=subtract_rect_pads, edge_inset=0.0))
+    # while True:
+    #     path_geo = merged_layer #.buffer(-current_inset, join_style=2)
+    #     if first_pass and pads and union_polys:
+    #         # after the seamless outer pass, exclude rect pad interiors (raster fills them)
+    #         merged_layer = merged_layer.difference(unary_union(union_polys))
+    #         first_pass = False
+    #     if path_geo.is_empty:
+    #         break
+    geoms = merged_layer.geoms if hasattr(merged_layer, 'geoms') else [merged_layer]
+    for geom in geoms:
+        if isinstance(geom, Polygon):
+            toolpaths.append(list(geom.exterior.coords))
+            for interior in geom.interiors:
+                toolpaths.append(list(interior.coords))
+    #     current_inset += stepover_dist
 
     return toolpaths
 
+# ─────────────────────────────────────────────────────────────────────────
+# Path ordering — greedy nearest-neighbor to cut G0 travel between paths
+# ─────────────────────────────────────────────────────────────────────────
 def order_paths_nearest(toolpaths):
     """Greedy nearest-neighbor ordering of toolpaths to minimize G0 travel."""
     if len(toolpaths) <= 2:
@@ -171,55 +184,9 @@ def order_paths_nearest(toolpaths):
         ordered.append(remaining.pop(best_i))
     return ordered
 
-def find_crossover_regions(raw_segments, nozzle_size):
-    """
-    Find regions where traces intersect and return insulator toolpaths
-    covering only those intersection areas.
-    """
-    if not raw_segments:
-        return []
-
-    trace_polys = []
-    for (sx, sy), (ex, ey), width in raw_segments:
-        line = LineString([(sx, sy), (ex, ey)])
-        poly = line.buffer(width / 2.0, cap_style=1, join_style=1)
-        trace_polys.append(poly)
-
-    tree = STRtree(trace_polys)
-    intersection_regions = []
-    for i, poly in enumerate(trace_polys):
-        candidates = tree.query(poly)
-        for j in candidates:
-            if j <= i:
-                continue
-            if trace_polys[j].intersects(poly):
-                overlap = poly.intersection(trace_polys[j])
-                if not overlap.is_empty and overlap.area > 0.001:
-                    intersection_regions.append(overlap)
-
-    if not intersection_regions:
-        return []
-
-    merged = unary_union(intersection_regions)
-
-    toolpaths = []
-    current_inset = nozzle_size / 2.0
-    stepover_dist = nozzle_size * 0.85
-
-    while True:
-        path_geo = merged.buffer(-current_inset)
-        if path_geo.is_empty:
-            break
-        geoms = path_geo.geoms if hasattr(path_geo, 'geoms') else [path_geo]
-        for geom in geoms:
-            if isinstance(geom, Polygon):
-                toolpaths.append(list(geom.exterior.coords))
-                for interior in geom.interiors:
-                    toolpaths.append(list(interior.coords))
-        current_inset += stepover_dist
-
-    return toolpaths
-
+# ─────────────────────────────────────────────────────────────────────────
+# Config loading / validation — fail fast on bad or corrupted config.json
+# ─────────────────────────────────────────────────────────────────────────
 def validate_config(config: dict) -> None:
     """Validate config.json values before running — catch bad inputs early."""
     errors = []
@@ -287,8 +254,8 @@ def get_head(configFile: dict, head_type: str) -> dict:
     # fallback to flat config for backwards compatibility
     if head_type == "conductive":
         return {
-            "nozzleSize": configFile.get("nozzleSize", 0.225),
-            "traceWidth": configFile.get("traceWidth", 0.225),
+            "nozzleSize": configFile.get("nozzleSize", DEFAULT_NOZZLE),
+            "traceWidth": configFile.get("traceWidth", DEFAULT_NOZZLE),
             "cureDryTemp": configFile.get("cure_dry_temp", 90),
             "cureDrySeconds": configFile.get("cure_dry_seconds", 300),
             "cureTemp": configFile.get("cure_temp", 170),
@@ -296,7 +263,7 @@ def get_head(configFile: dict, head_type: str) -> dict:
         }
     if head_type == "insulator":
         return {
-            "nozzleSize": configFile.get("nozzleSize", 0.225),
+            "nozzleSize": configFile.get("nozzleSize", DEFAULT_NOZZLE),
             "cureTemp": configFile.get("insulator_cure_temp", 135),
             "cureSeconds": configFile.get("insulator_cure_seconds", 600),
             "offsetX": configFile.get("insulator_head_offset_x", 0),
@@ -315,20 +282,6 @@ def get_head(configFile: dict, head_type: str) -> dict:
             "cureSeconds": 0
         }
     return {}
-
-def get_head_for_layer(configFile: dict, layer_type: str) -> dict:
-    """Automatically select the correct head based on layer type."""
-    if layer_type == "copper":
-        return get_head(configFile, "conductive")
-    if layer_type == "insulator":
-        return get_head(configFile, "insulator")
-    if layer_type == "paste":
-        return get_head(configFile, "paste")
-    return get_head(configFile, "conductive")  # default
-
-def get_tool_number(head: dict) -> int:
-    """Get the tool number for a head profile. Defaults to 0."""
-    return head.get("toolNumber", 0)
 
 def get_layer_type(file_function: str) -> str:
     """Detect layer type from the Gerber file_function field (KiCad job file)."""
@@ -367,6 +320,11 @@ def get_layer_type_from_filename(filename: str) -> str:
     return "unknown"
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Gerber parsing — pads (extract_coords) and traces (extract_traces).
+# Coordinates are normalized so the board min corner sits at the global
+# origin computed in compute_global_origin() (shared across all layers).
+# ─────────────────────────────────────────────────────────────────────────
 def extract_coords(gbr_path: str, offset_x: float = None, offset_y: float = None):
     """Extract X/Y pad coordinates with aperture sizes."""
     gerber_file = GerberFile.from_file(gbr_path)
@@ -509,7 +467,7 @@ def approximate_arc(x1, y1, x2, y2, i, j, clockwise, segments=16):
         points.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
     return points
 
-def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None, min_trace_width: float = 0.225):
+def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None, min_trace_width: float = DEFAULT_NOZZLE):
     gerber_file = GerberFile.from_file(gbr_path)
     source = gerber_file.source_code
     scale = 25.4 if "%MOIN*%" in source else 1.0
@@ -528,7 +486,7 @@ def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None
         if apt_type in ('C', 'R'):
             aperture_sizes[apt_id] = float(params[0]) * scale
         else:
-            aperture_sizes[apt_id] = float(params[0]) * scale if params else 0.225
+            aperture_sizes[apt_id] = float(params[0]) * scale if params else DEFAULT_NOZZLE
 
     raw_segments = []
     current_x = 0.0
@@ -623,7 +581,7 @@ def extract_traces(gbr_path: str, offset_x: float = None, offset_y: float = None
 
     return normalized, min_x, min_y
 
-def compute_global_origin(files_to_process: list, margin: float = 2.0, nozzle_size: float = 0.225) -> tuple[float, float]:
+def compute_global_origin(files_to_process: list, margin: float = BOARD_MARGIN, nozzle_size: float = DEFAULT_NOZZLE) -> tuple[float, float]:
     """
     Compute a single shared origin across all layers by finding the global
     minimum X/Y coordinate across every Gerber file. This ensures all layers
@@ -663,6 +621,11 @@ def compute_global_origin(files_to_process: list, margin: float = 2.0, nozzle_si
     print(f"Global origin: raw_min=({global_min_x:.3f}, {global_min_y:.3f})  offset=({offset_x:.3f}, {offset_y:.3f})")
     return offset_x, offset_y
 
+# ─────────────────────────────────────────────────────────────────────────
+# Pad fill generators — spiral for circular pads, concentric rects for
+# rectangular pads. Tunables (stepover ratios, insets) are inline in these
+# functions and are part of the toolpath math — change with care.
+# ─────────────────────────────────────────────────────────────────────────
 def generate_pad_spiral(cx: float, cy: float, radius: float, nozzle_size: float, use_arc_moves: bool = False) -> list[tuple[float, float, bool, float, float]]:
     """Fill a circular pad with concentric circles from center outward."""
     points = []
@@ -738,16 +701,19 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C', inset=None, fill_c
 
     return all_rects
 
-def camera_sweep(g, safe_z:float=50.0, board_size_x: float = 0, board_size_y: float = 0,
+# ─────────────────────────────────────────────────────────────────────────
+# Camera sweep — serpentine capture grid with a backlash jiggle at each row
+# start; M118/M240 markers are consumed by the vision pipeline (Andrew).
+# ─────────────────────────────────────────────────────────────────────────
+def camera_sweep(g, safe_z:float=CAMERA_SAFE_Z_DEFAULT, board_size_x: float = 0, board_size_y: float = 0,
                  layer_index: int = 0, camera_head_tool: int = 3,
-                 row_spacing: float = 2.5, column_spacing: float = 2.5,
+                 row_spacing: float = CAMERA_GRID_SPACING, column_spacing: float = CAMERA_GRID_SPACING,
                  origin_x: float = 0, origin_y: float = 0) -> bool:
     """Camera sweep after each ink + cure sequence."""
     print(f"  camera sweep layer {layer_index} — board {board_size_x:.1f}x{board_size_y:.1f}mm")
 
+    g.write("G28 ; home all axes")
     g.write(f"T{camera_head_tool} ; camera head")
-    g.write("G4 S5 ; wait after head change")
-    g.write("G28 ; home after head change")
     g.write(f"M118 START_LAYER {layer_index}")
 
     num_rows    = max(1, math.ceil(board_size_y / row_spacing)) + 1
@@ -764,7 +730,7 @@ def camera_sweep(g, safe_z:float=50.0, board_size_x: float = 0, board_size_y: fl
             x_pos = origin_x + col * column_spacing
             g.write(f"G0 X{x_pos:.3f} Y{y_pos:.3f} Z{safe_z:.3f}")
             if row == 0 and col == 0:
-                g.write("G4 S3 ; settle wait after first jiggle")
+                g.write(f"G4 S{CAMERA_SETTLE_S} ; settle wait after first jiggle")
             g.write("M240 ; camera capture")
         g.write(f"G0 X{origin_x:.3f} Y{y_pos:.3f} Z{safe_z:.3f}")
         g.write("M118 NEW_ROW")
@@ -772,30 +738,6 @@ def camera_sweep(g, safe_z:float=50.0, board_size_x: float = 0, board_size_y: fl
     g.write("G28 ; return home after sweep")
     g.write(f"M118 END_LAYER {layer_index}")
     return True
-
-def deposit_insulator(g, coords: list, work_z: float, safe_z: float, nozzle_size: float, configFile: dict) -> None:
-    """Deposit insulator layer (ACI SI3104) over all pad positions."""
-    if not coords:
-        print("  no coords for insulator layer, skipping")
-        return
-
-    insulator_head = get_head(configFile, "insulator")
-    offset_x = insulator_head.get("offsetX", 0)
-    offset_y = insulator_head.get("offsetY", 0)
-    insulator_cure_seconds = insulator_head.get("cureSeconds", 600)
-
-    print(f"  depositing insulator over {len(coords)} points")
-    for x, y, *_ in coords:
-        ox = max(0, x + offset_x)
-        oy = max(0, y + offset_y)
-        g.rapid(point=(ox, oy))
-        g.rapid(z=work_z)
-        g.rapid(z=safe_z)
-
-    print(f"  insulator cure: 135C for {insulator_cure_seconds}s")
-    g.write(f"M190 S{int(insulator_head.get('cureTemp', 135))}")
-    g.sleep(insulator_cure_seconds)
-    g.write("M190 S0")
 
 def move_with_extrusion(g, x: float, y: float, from_x: float, from_y: float,
                          current_e: float, flow_rate: float, layer_height: float,
@@ -848,8 +790,8 @@ def fit_arc_to_points(points, tolerance=0.01):
     return (ux, uy, r)
 
 def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_width,
-                          enable_extrusion, use_arc_moves, arc_tolerance=0.002,
-                          min_arc_points=5, work_z=0.2, pullpush=30.0, pullpush_speed=200, lift_z=5):
+                          enable_extrusion, use_arc_moves, arc_tolerance=ARC_TOLERANCE,
+                          min_arc_points=ARC_MIN_POINTS, work_z=0.2, pullpush=30.0, pullpush_speed=200, lift_z=5):
     """Write a Shapely path to G-code, replacing arc segments with G2/G3 where possible."""
     if not path or len(path) < 2:
         return current_e
@@ -867,7 +809,7 @@ def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_widt
     while i < len(path):
         if use_arc_moves:
             best_arc = None
-            for end in range(i + min_arc_points, min(i + 20, len(path)) + 1):
+            for end in range(i + min_arc_points, min(i + ARC_MAX_WINDOW, len(path)) + 1):
                 window = [(path[j][0], path[j][1]) for j in range(i-1, end)]
                 result = fit_arc_to_points(window, tolerance=arc_tolerance)
                 if result:
@@ -900,14 +842,19 @@ def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_widt
 
     return current_e
 
-def prime_lead_screw(g, lift_z=5.5, work_z=0.2, extrude_amount=20, extrude_feed=200,
-                     prime_cycles=20, cycle_delay_s=2.5, settle_s=10):
+# ─────────────────────────────────────────────────────────────────────────
+# Prime / purge — seats the lead-screw piston against the ink and runs
+# repeated mini-extrudes so dispensing starts consistently. Tunables at top.
+# ─────────────────────────────────────────────────────────────────────────
+def prime_lead_screw(g, lift_z=PRIME_LIFT_Z, work_z=0.2, extrude_amount=PRIME_EXTRUDE, extrude_feed=PRIME_FEED,
+                     prime_cycles=PRIME_CYCLES, cycle_delay_s=PRIME_CYCLE_DELAY, settle_s=PRIME_SETTLE_S):
     """
     Prime the lead screw at startup — lifts Z, pushes piston down to seat
     against ink, then runs repeated mini-extrudes to prep for dispensing.
     """
     print("Priming lead screw...")
-    g.write(f"G0 Z{lift_z} F20000 ; lift Z for lead screw engagement")
+    g.write(f"G0 Z{lift_z} F{PRIME_TRAVEL_FEED} ; lift Z for lead screw engagement")
+    g.write("G0 X1 Y1")
     g.write(f"G1 E{extrude_amount} F{extrude_feed} ; initial piston seat")
 
     for i in range(prime_cycles):
@@ -918,15 +865,21 @@ def prime_lead_screw(g, lift_z=5.5, work_z=0.2, extrude_amount=20, extrude_feed=
 
     "Jerk the excess ink away"
     g.rapid(z=work_z)
-    g.move(x=2)
+    g.move(x=10)
     g.rapid(z=lift_z)
     print("Lead screw primed")
 
+# ─────────────────────────────────────────────────────────────────────────
+# Main entry point. Layer order: copper -> (cure, camera sweep) -> paste ->
+# insulator -> crossover. Z scheme: each layer works at <layer>WorkZ +
+# substrateHeight (absolute carriage coords incl. head length), and travels
+# at workZ + hopClearance. All of those come from config.json.
+# ─────────────────────────────────────────────────────────────────────────
 def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
         enable_crossover=True, use_arc_moves=False, enable_extrusion=False, enable_purge=True, enable_conductive=True, enable_paste=True,
         ink_traces_only=False, enable_gerber_transfer=True):
     """Main entry point — loads config, parses Gerber files, generates G-code."""
-    print("=== NEW SLICER v2.2 (ratio-tiered narrow traces) ===")
+    print("=== NEW SLICER v2 ===")
 
     with open(os.path.join(BASE_DIR, "config.json"), "r") as f:
         configFile = json.load(f)
@@ -992,7 +945,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     board_size_x     = 220
     board_size_y     = 220
     board_layers     = 2
-    copper_thickness = 0.035
+    copper_thickness = 0.035   # parsed but currently unused; kept for future stackup logic
     files_to_process = []
 
     try:
@@ -1065,8 +1018,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     files_to_process.sort(key=lambda x: LAYER_ORDER.get(x[1], 99))
 
     # ── GLOBAL ORIGIN — compute once, shared across all layers ──
-    margin      = 2.0
-    nozzle_size = conductive_head.get("nozzleSize", 0.225)
+    margin      = BOARD_MARGIN
+    nozzle_size = conductive_head.get("nozzleSize", DEFAULT_NOZZLE)
     global_offset_x, global_offset_y = compute_global_origin(
         files_to_process, margin=margin, nozzle_size=nozzle_size
     )
@@ -1095,8 +1048,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
         g.write(f"F{print_feed_rate} ; set print feed rate")
         if enable_tool_change:
             g.write("T0 ; conductive head")
-            g.write("G4 S5 ; wait after head change")
-            g.write("G28 ; home after head change")
 
         layer_mode = configFile.get("layerMode", "single")
 
@@ -1118,8 +1069,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     print(f"  skipping {fname} (conductive ink disabled)")
                     continue
                 
-                min_trace_width = conductive_head.get("traceWidth", 0.225)
-                nozzle_size     = conductive_head.get("nozzleSize", 0.225)
+                min_trace_width = conductive_head.get("traceWidth", DEFAULT_NOZZLE)
+                nozzle_size     = conductive_head.get("nozzleSize", DEFAULT_NOZZLE)
                 flow_rate       = conductive_head.get("flowRate", 0.05)
                 layer_height    = conductive_head.get("layerHeight", 0.2)
 
@@ -1149,7 +1100,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         )
                         if enable_extrusion:
                             current_e -= retraction_distance
-                            g.write(f"G1 E{current_e:.5f} F1800")
+                            g.write(f"G1 E{current_e:.5f} F{RETRACT_FEED}")
 
                 if pads and ink_traces_only:
                     print(f"  skipping {len(pads)} ink pads (pads drawn by solder paste head)")
@@ -1199,19 +1150,19 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                 for sx, sy, ex, ey in rect_segments:
                                     current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey
-                g.write("G1 E-400 F200 ; large pull out to stop ink extrusion")
-                g.rapid(x=0,y=-20, z=150)
+                g.write(f"G1 E-{INK_FINAL_PULL_E} F{INK_FINAL_PULL_FEED} ; large pull out to stop ink extrusion")
+                g.rapid(x=PARK_X, y=PARK_Y, z=PARK_Z)  # park away from board for cure
                 if enable_heating:
                     cure_dry_temp    = conductive_head.get("cureDryTemp", 90)
                     cure_dry_seconds = conductive_head.get("cureDrySeconds", 300)
                     cure_temp        = conductive_head.get("cureTemp", 170)
                     cure_seconds     = conductive_head.get("cureSeconds", 900)
                     g.write(f"M190 S{cure_dry_temp}")
-                    g.sleep(cure_dry_seconds)
+                    g.write("G4 S300 ; stage 1: dry")
                     g.write(f"M190 S{cure_temp}")
-                    g.sleep(cure_seconds)
+                    g.write("G4 S900 ; stage 2: cure")
                     g.write("M190 S0")
-                    g.write("G4 S1800 ; cool-down wait 30 min")
+                    g.write(f"G4 S{COOLDOWN_WAIT_S} ; cool-down wait")
 
                 if enable_camera_sweep:
                     if pads or raw_segments:
@@ -1242,16 +1193,10 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 if not enable_paste:
                     print(f"  skipping {fname} (solder paste disabled)")
                     continue
-                paste_head        = get_head(configFile, "paste")
-                dwell_factor      = paste_head.get("dwellFactor", 0.5)
-                paste_nozzle_size = paste_head.get("nozzleSize", 0.3)
-                paste_feed_rate   = configFile.get("pasteFeedRate", 600)
-                paste_scale       = configFile.get("pasteScale", 0.9)
+                paste_head = get_head(configFile, "paste")
                 pads, _, _   = extract_coords(gbr_path, offset_x=global_offset_x, offset_y=global_offset_y)
                 if enable_tool_change:
                     g.write(f"T{paste_head.get('toolNumber', 1)} ; paste head")
-                    g.write("G4 S5 ; wait after head change")
-                    g.write("G28 ; home after head change")
                 print(f"  extracted {len(pads)} paste pads")
 
                 # ── PRIME LEAD SCREW ──────────────────────────────────
@@ -1270,10 +1215,10 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 g.rapid(z=paste_hop_z)
 
             elif layer_type == "insulator":
-                ins_nozzle_size  = insulator_head.get("nozzleSize", 0.225)
+                ins_nozzle_size  = insulator_head.get("nozzleSize", DEFAULT_NOZZLE)
                 ins_flow_rate    = insulator_head.get("flowRate", 0.04)
                 ins_layer_height = insulator_head.get("layerHeight", 0.2)
-                ins_trace_width  = insulator_head.get("traceWidth", 0.225)
+                ins_trace_width  = insulator_head.get("traceWidth", DEFAULT_NOZZLE)
 
                 raw_segments, _, _ = extract_traces(
                     gbr_path, offset_x=global_offset_x, offset_y=global_offset_y,
@@ -1283,8 +1228,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
                 if enable_tool_change:
                     g.write(f"T{insulator_head.get('toolNumber', 4)} ; insulator head")
-                    g.write("G4 S5 ; wait after head change")
-                    g.write("G28 ; home after head change")
 
                 if raw_segments:
                     print(f"  extracted {len(raw_segments)} insulator trace segments")
@@ -1300,7 +1243,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         )
                         if enable_extrusion:
                             current_e -= retraction_distance
-                            g.write(f"G1 E{current_e:.5f} F1800")
+                            g.write(f"G1 E{current_e:.5f} F{RETRACT_FEED}")
 
                 if pads:
                     print(f"  extracted {len(pads)} insulator pads")
@@ -1348,14 +1291,14 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                 for sx, sy, ex, ey in rect_segments:
                                     current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, ins_flow_rate, ins_layer_height, ins_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey                
-                g.rapid(x=0,y=-20, z=150)
+                g.rapid(x=PARK_X, y=PARK_Y, z=PARK_Z)  # park away from board for cure
                 if enable_heating:
                     ins_cure_temp    = insulator_head.get("cureTemp", 135)
                     ins_cure_seconds = insulator_head.get("cureSeconds", 600)
                     g.write(f"M190 S{ins_cure_temp}")
                     g.sleep(ins_cure_seconds)
                     g.write("M190 S0")
-                    g.write("G4 S1800 ; cool-down wait 30 min")
+                    g.write(f"G4 S{COOLDOWN_WAIT_S} ; cool-down wait")
 
                 if enable_camera_sweep:
                     if pads or raw_segments:
@@ -1381,8 +1324,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 if not enable_crossover:
                     print(f"  skipping {fname} (crossover disabled)")
                     continue
-                min_trace_width = conductive_head.get("traceWidth", 0.225)
-                nozzle_size     = conductive_head.get("nozzleSize", 0.225)
+                min_trace_width = conductive_head.get("traceWidth", DEFAULT_NOZZLE)
+                nozzle_size     = conductive_head.get("nozzleSize", DEFAULT_NOZZLE)
                 flow_rate       = conductive_head.get("flowRate", 0.05)
                 layer_height    = conductive_head.get("layerHeight", 0.2)
 
@@ -1394,8 +1337,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
                 if enable_tool_change:
                     g.write(f"T{conductive_head.get('toolNumber', 0)} ; conductive head (crossover layer)")
-                    g.write("G4 S5 ; wait after head change")
-                    g.write("G28 ; home after head change")
 
                 if raw_segments:
                     print(f"  extracted {len(raw_segments)} crossover trace segments")
@@ -1412,7 +1353,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                         )
                         if enable_extrusion:
                             current_e -= retraction_distance
-                            g.write(f"G1 E{current_e:.5f} F1800")
+                            g.write(f"G1 E{current_e:.5f} F{RETRACT_FEED}")
 
                 if pads:
                     print(f"  extracted {len(pads)} crossover pads")
@@ -1457,14 +1398,14 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                 for sx, sy, ex, ey in rect_segments:
                                     current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey
-                g.rapid(x=0,y=-20, z=150)
+                g.rapid(x=PARK_X, y=PARK_Y, z=PARK_Z)  # park away from board for cure
                 if enable_heating:
                     g.write(f"M190 S{conductive_head.get('cureDryTemp', 90)}")
                     g.sleep(conductive_head.get("cureDrySeconds", 300))
                     g.write(f"M190 S{conductive_head.get('cureTemp', 170)}")
                     g.sleep(conductive_head.get("cureSeconds", 900))
                     g.write("M190 S0")
-                    g.write("G4 S1800 ; cool-down wait 30 min")
+                    g.write(f"G4 S{COOLDOWN_WAIT_S} ; cool-down wait")
 
                 if enable_camera_sweep:
                     if pads or raw_segments:

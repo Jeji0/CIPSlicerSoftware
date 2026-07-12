@@ -24,7 +24,7 @@ def load_config_into_fields(fields):
             config = json.load(f)
 
         fields["substrateHeight"].delete(0, tk.END)
-        fields["substrateHeight"].insert(0, config.get("substrateHeight", 0.2))
+        fields["substrateHeight"].insert(0, config.get("substrateHeight", 0))
 
         fields["printSpeed"].delete(0, tk.END)
         fields["printSpeed"].insert(0, config.get("printSpeed", 60))
@@ -39,20 +39,27 @@ def load_config_into_fields(fields):
 
         fields["layerMode"].set(config.get("layerMode", "single"))
 
+        # ink settings load from the active head's entry in heads[] —
+        # the same place Save Settings writes them (flat keys are gone)
+        active_list = config.get("activeHeads", ["conductor3"])
+        active_id = active_list[0] if active_list else "conductor3"
+        head = next((h for h in config.get("heads", [])
+                     if h.get("id") == active_id), {})
+
         fields["nozzleSize"].delete(0, tk.END)
-        fields["nozzleSize"].insert(0, config.get("nozzleSize", 0.225))
+        fields["nozzleSize"].insert(0, head.get("nozzleSize", 0.2))
 
         fields["cureDryTemp"].delete(0, tk.END)
-        fields["cureDryTemp"].insert(0, config.get("cure_dry_temp", 90))
+        fields["cureDryTemp"].insert(0, head.get("cureDryTemp", 90))
 
         fields["cureDrySeconds"].delete(0, tk.END)
-        fields["cureDrySeconds"].insert(0, config.get("cure_dry_seconds", 300))
+        fields["cureDrySeconds"].insert(0, head.get("cureDrySeconds", 300))
 
         fields["cureTemp"].delete(0, tk.END)
-        fields["cureTemp"].insert(0, config.get("cure_temp", 170))
+        fields["cureTemp"].insert(0, head.get("cureTemp", 170))
 
         fields["cureSeconds"].delete(0, tk.END)
-        fields["cureSeconds"].insert(0, config.get("cure_seconds", 900))
+        fields["cureSeconds"].insert(0, head.get("cureSeconds", 900))
 
         fields["printFeedRate"].delete(0, tk.END)
         fields["printFeedRate"].insert(0, config.get("printFeedRate", 3600))
@@ -134,18 +141,13 @@ def save_settings(fields, output):
                 float(fields["bedZ"].get())
             ],
             "layerMode": fields["layerMode"].get(),
-            "nozzleSize": float(fields["nozzleSize"].get()),
-            "cure_dry_temp": float(fields["cureDryTemp"].get()),
-            "cure_dry_seconds": float(fields["cureDrySeconds"].get()),
-            "cure_temp": float(fields["cureTemp"].get()),
-            "cure_seconds": float(fields["cureSeconds"].get()),
             "gerberFile": fields["gerberFile"].get(),
             "gerberJobFile": fields["gerberJobFile"].get(),
             "printFeedRate": float(fields["printFeedRate"].get()),
         }
         # preserve the full activeHeads list; just ensure the selected head is in it
         try:
-            with open("config.json", "r") as f:
+            with open(cF.CONFIG_PATH, "r") as f:
                 current = json.load(f).get("activeHeads", [])
         except Exception:
             current = []
@@ -153,11 +155,32 @@ def save_settings(fields, output):
         if selected not in current:
             current.append(selected)
         updates["activeHeads"] = current
+
+        # write ink settings into the selected head entry (the slicer reads
+        # heads[], not the old flat keys); traceWidth tracks nozzle size so
+        # the "nozzle must not exceed trace width" invariant always holds
+        try:
+            with open(cF.CONFIG_PATH, "r") as f:
+                cfg_heads = json.load(f).get("heads", [])
+        except Exception:
+            cfg_heads = []
+        for h in cfg_heads:
+            if h.get("id") == selected:
+                h["nozzleSize"] = float(fields["nozzleSize"].get())
+                h["traceWidth"] = float(fields["nozzleSize"].get())
+                h["cureDryTemp"] = float(fields["cureDryTemp"].get())
+                h["cureDrySeconds"] = float(fields["cureDrySeconds"].get())
+                h["cureTemp"] = float(fields["cureTemp"].get())
+                h["cureSeconds"] = float(fields["cureSeconds"].get())
+        if cfg_heads:
+            updates["heads"] = cfg_heads
         cF.updConf(updates)
         output.insert(tk.END, "Settings saved.\n")
         output.see(tk.END)
     except ValueError:
         messagebox.showerror("Error", "Invalid input. Please enter numeric values.")
+    except Exception as e:
+        messagebox.showerror("Error", f"Save failed: {e}")
 
 
 def browse_file(fields, key="gerberFile"):
