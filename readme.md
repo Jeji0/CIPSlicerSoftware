@@ -2,8 +2,8 @@
 
 Slicer for the **Conductive Ink Printer (C.I.P.)** — a modified Creality Ender 3 that
 fabricates PCBs by dispensing conductive ink and solder paste. Takes KiCad Gerber
-exports (zipped) and generates G-code for the multi-head tool: conductive ink,
-solder paste, insulator, and camera inspection head.
+exports (zipped) and generates G-code for the quick-swappable heads: conductive ink,
+solder paste, and camera inspection head.
 
 ## Requirements
 
