@@ -854,7 +854,7 @@ def prime_lead_screw(g, lift_z=PRIME_LIFT_Z, work_z=0.2, extrude_amount=PRIME_EX
     """
     print("Priming lead screw...")
     g.write(f"G0 Z{lift_z} F{PRIME_TRAVEL_FEED} ; lift Z for lead screw engagement")
-    g.write("G0 X1 Y1")
+    g.write("G0 X0 Y200")
     g.write(f"G1 E{extrude_amount} F{extrude_feed} ; initial piston seat")
 
     for i in range(prime_cycles):
