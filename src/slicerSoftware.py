@@ -880,7 +880,7 @@ def prime_lead_screw(g, lift_z=PRIME_LIFT_Z, work_z=0.2, extrude_amount=PRIME_EX
 # ─────────────────────────────────────────────────────────────────────────
 def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
         enable_crossover=True, use_arc_moves=False, enable_extrusion=False, enable_purge=True, enable_conductive=True, enable_paste=True,
-        ink_traces_only=False, enable_gerber_transfer=True):
+        ink_traces_only=False, enable_gerber_transfer=True, enable_second_ink_layer=False):
     """Main entry point — loads config, parses Gerber files, generates G-code."""
     print("=== NEW SLICER v2 ===")
 
@@ -897,7 +897,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     current_e           = 0.0
 
     # Z heights for each layer — configurable, with sensible defaults
-    substrate_height = configFile.get("substrateHeight", 0)
+    substrate_height = configFile.get("substrateHeight", 1.5)
     copper_work_z    = configFile.get("copperWorkZ") + substrate_height
     insulator_work_z = configFile.get("insulatorWorkZ") + substrate_height
     crossover_work_z = configFile.get("crossoverWorkZ") + substrate_height
@@ -908,6 +908,9 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     insulator_hop_z = insulator_work_z + hop_clearance
     crossover_hop_z = crossover_work_z + hop_clearance
     paste_hop_z     = paste_work_z     + hop_clearance
+    base_copper_work_z = copper_work_z   # for optional second-ink-layer Z offset
+    copper_passes_done = 0
+    total_copper_passes = 1  # becomes 2 when the second ink layer is enabled
 
     print_feed_rate = configFile.get("printFeedRate", 3600)
     trace_edge_inset = configFile.get("traceEdgeInset", 0.05)
@@ -1027,6 +1030,21 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
         files_to_process, margin=margin, nozzle_size=nozzle_size
     )
 
+    # second ink layer: duplicate the top copper entry so the identical
+    # copper pass (traces + pads + cure) runs twice back to back
+    # the toggle or the config key can enable it; Z offset for the second
+    # pass comes from config (0 = literally identical G-code both passes)
+    second_ink_z_offset = configFile.get("secondInkLayerZOffset", 0)
+    if enable_second_ink_layer or configFile.get("secondInkLayer", False):
+        enable_second_ink_layer = True
+        for i, entry in enumerate(files_to_process):
+            if entry[1] == "copper" and not entry[2]:
+                files_to_process.insert(i + 1, entry)
+                print("Second ink layer enabled — copper layer will print twice"
+                      + (f" (second pass Z +{second_ink_z_offset})" if second_ink_z_offset else ""))
+                total_copper_passes = 2
+                break
+
     # --- G-Code Generation Phase ---
     with GCodeBuilder(output=output_file) as g:
         if enable_gerber_transfer:
@@ -1071,6 +1089,12 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 if not enable_conductive:
                     print(f"  skipping {fname} (conductive ink disabled)")
                     continue
+                # second copper pass prints one ink-layer higher if configured
+                if copper_passes_done > 0 and second_ink_z_offset:
+                    copper_work_z = base_copper_work_z + copper_passes_done * second_ink_z_offset
+                    copper_hop_z  = copper_work_z + hop_clearance
+                    print(f"  second ink pass at Z{copper_work_z}")
+                copper_passes_done += 1
                 
                 min_trace_width = conductive_head.get("traceWidth", DEFAULT_NOZZLE)
                 nozzle_size     = conductive_head.get("nozzleSize", DEFAULT_NOZZLE)
@@ -1153,44 +1177,48 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                 for sx, sy, ex, ey in rect_segments:
                                     current_e = move_with_extrusion(g, ex, ey, last_x, last_y, current_e, flow_rate, layer_height, min_trace_width, enable_extrusion)
                                     last_x, last_y = ex, ey
-                g.write(f"G1 E-{INK_FINAL_PULL_E} F{INK_FINAL_PULL_FEED} ; large pull out to stop ink extrusion")
-                g.rapid(x=PARK_X, y=PARK_Y, z=PARK_Z)  # park away from board for cure
-                if enable_heating:
-                    cure_dry_temp    = conductive_head.get("cureDryTemp", 90)
-                    cure_dry_seconds = conductive_head.get("cureDrySeconds", 300)
-                    cure_temp        = conductive_head.get("cureTemp", 170)
-                    cure_seconds     = conductive_head.get("cureSeconds", 900)
-                    g.write(f"M190 S{cure_dry_temp}")
-                    g.write("G4 S300 ; stage 1: dry")
-                    g.write(f"M190 S{cure_temp}")
-                    g.write("G4 S900 ; stage 2: cure")
-                    g.write("M190 S0")
-                    g.write(f"G4 S{COOLDOWN_WAIT_S} ; cool-down wait")
+                # cure + camera sweep only after the FINAL copper pass;
+                # with the second ink layer on, pass 2 prints wet-on-wet
+                # and everything cures/sweeps once at the end
+                if copper_passes_done >= total_copper_passes:
+                    g.write(f"G1 E-{INK_FINAL_PULL_E} F{INK_FINAL_PULL_FEED} ; large pull out to stop ink extrusion")
+                    g.rapid(x=PARK_X, y=PARK_Y, z=PARK_Z)  # park away from board for cure
+                    if enable_heating:
+                        cure_dry_temp    = conductive_head.get("cureDryTemp", 90)
+                        cure_dry_seconds = conductive_head.get("cureDrySeconds", 300)
+                        cure_temp        = conductive_head.get("cureTemp", 170)
+                        cure_seconds     = conductive_head.get("cureSeconds", 900)
+                        g.write(f"M190 S{cure_dry_temp}")
+                        g.write("G4 S300 ; stage 1: dry")
+                        g.write(f"M190 S{cure_temp}")
+                        g.write("G4 S900 ; stage 2: cure")
+                        g.write("M190 S0")
+                        g.write(f"G4 S{COOLDOWN_WAIT_S} ; cool-down wait")
 
-                if enable_camera_sweep:
-                    if pads or raw_segments:
-                        all_x = [p[0] for p in pads] + \
-                                [s[0][0] for s in raw_segments] + \
-                                [s[1][0] for s in raw_segments]
-                        all_y = [p[1] for p in pads] + \
-                                [s[0][1] for s in raw_segments] + \
-                                [s[1][1] for s in raw_segments]
-                        sweep_origin_x = min(all_x)
-                        sweep_origin_y = min(all_y)
-                        sweep_size_x   = max(all_x) - sweep_origin_x
-                        sweep_size_y   = max(all_y) - sweep_origin_y
-                    else:
-                        sweep_origin_x = global_offset_x
-                        sweep_origin_y = global_offset_y
-                        sweep_size_x   = board_size_x
-                        sweep_size_y   = board_size_y
-                    camera_sweep(g, safe_z=camera_work_z,
-                                 board_size_x=sweep_size_x,
-                                 board_size_y=sweep_size_y,
-                                 layer_index=0,
-                                 camera_head_tool=camera_tool_number,
-                                 origin_x=sweep_origin_x,
-                                 origin_y=sweep_origin_y)
+                    if enable_camera_sweep:
+                        if pads or raw_segments:
+                            all_x = [p[0] for p in pads] + \
+                                    [s[0][0] for s in raw_segments] + \
+                                    [s[1][0] for s in raw_segments]
+                            all_y = [p[1] for p in pads] + \
+                                    [s[0][1] for s in raw_segments] + \
+                                    [s[1][1] for s in raw_segments]
+                            sweep_origin_x = min(all_x)
+                            sweep_origin_y = min(all_y)
+                            sweep_size_x   = max(all_x) - sweep_origin_x
+                            sweep_size_y   = max(all_y) - sweep_origin_y
+                        else:
+                            sweep_origin_x = global_offset_x
+                            sweep_origin_y = global_offset_y
+                            sweep_size_x   = board_size_x
+                            sweep_size_y   = board_size_y
+                        camera_sweep(g, safe_z=camera_work_z,
+                                     board_size_x=sweep_size_x,
+                                     board_size_y=sweep_size_y,
+                                     layer_index=0,
+                                     camera_head_tool=camera_tool_number,
+                                     origin_x=sweep_origin_x,
+                                     origin_y=sweep_origin_y)
 
             elif layer_type == "paste":
                 if not enable_paste:

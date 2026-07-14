@@ -47,7 +47,11 @@ def load_config_into_fields(fields):
                      if h.get("id") == active_id), {})
 
         fields["nozzleSize"].delete(0, tk.END)
-        fields["nozzleSize"].insert(0, head.get("nozzleSize", 0.2))
+        noz = float(head.get("nozzleSize", 0.2))
+        # show 3 decimals when exact (0.2 -> "0.200"), full precision otherwise
+        # (0.2032 stays "0.2032", never visually rounded)
+        noz_txt = f"{noz:.3f}" if abs(noz - round(noz, 3)) < 1e-12 else repr(noz)
+        fields["nozzleSize"].insert(0, noz_txt)
 
         fields["cureDryTemp"].delete(0, tk.END)
         fields["cureDryTemp"].insert(0, head.get("cureDryTemp", 90))
@@ -68,10 +72,16 @@ def load_config_into_fields(fields):
         fields["gerberFile"].insert(0, config.get("gerberFile", ""))
 
         fields["gerberJobFile"].delete(0, tk.END)
-        #fields["gerberJobFile"].insert(0, config.get("gerberJobFile", ""))
+        fields["gerberJobFile"].insert(0, config.get("gerberJobFile", ""))
         active = config.get("activeHeads", ["conductor3"])
         if active:
             fields["activeHead"].set(active[0])
+
+        # restore Debug/Testing checkboxes; missing entries keep their defaults
+        saved_toggles = config.get("toggles", {})
+        for key, var in fields.items():
+            if key.startswith("toggle_") and key in saved_toggles:
+                var.set(bool(saved_toggles[key]))
 
     except Exception as e:
         print(f"Could not load config: {e}")
@@ -108,7 +118,9 @@ def on_head_change(fields, head_id):
             return
 
         fields["nozzleSize"].delete(0, tk.END)
-        fields["nozzleSize"].insert(0, head.get("nozzleSize", 0.225))
+        _noz = float(head.get("nozzleSize", 0.225))
+        _txt = f"{_noz:.3f}" if abs(_noz - round(_noz, 3)) < 1e-12 else repr(_noz)
+        fields["nozzleSize"].insert(0, _txt)
 
         fields["cureDryTemp"].delete(0, tk.END)
         fields["cureDryTemp"].insert(0, head.get("cureDryTemp", 90))
@@ -155,6 +167,11 @@ def save_settings(fields, output):
         if selected not in current:
             current.append(selected)
         updates["activeHeads"] = current
+
+        # persist Debug/Testing checkbox states
+        updates["toggles"] = {key: bool(var.get())
+                              for key, var in fields.items()
+                              if key.startswith("toggle_")}
 
         # write ink settings into the selected head entry (the slicer reads
         # heads[], not the old flat keys); traceWidth tracks nozzle size so
@@ -352,6 +369,7 @@ def generateGcode(fields, output, btn, root):
                 enable_paste=fields["toggle_paste"].get(),
                 ink_traces_only=fields["toggle_ink_traces_only"].get(),
                 enable_gerber_transfer=fields["toggle_gerber_transfer"].get(),
+                enable_second_ink_layer=fields["toggle_second_ink"].get(),
             )
 
             gerber_path = fields["gerberFile"].get()
@@ -510,6 +528,7 @@ def GUI():
     fields["toggle_paste"] = tk.BooleanVar(value=True)
     fields["toggle_ink_traces_only"] = tk.BooleanVar(value=False)
     fields["toggle_gerber_transfer"] = tk.BooleanVar(value=True)
+    fields["toggle_second_ink"] = tk.BooleanVar(value=False)
 
     tk.Checkbutton(toggle_frame, text="Purge",
                    variable=fields["toggle_purge"],
@@ -545,6 +564,9 @@ def GUI():
     tk.Checkbutton(toggle_frame, text="Gerber file transfer",
                variable=fields["toggle_gerber_transfer"],
                font=("Helvetica", 11)).grid(row=2, column=3, sticky="w")
+    tk.Checkbutton(toggle_frame, text="Second ink layer",
+               variable=fields["toggle_second_ink"],
+               font=("Helvetica", 11)).grid(row=3, column=0, sticky="w", padx=(0, 16))
 
     # ── BUTTONS ──
     btn_frame = tk.Frame(root)

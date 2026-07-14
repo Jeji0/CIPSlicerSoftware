@@ -7,7 +7,7 @@
     "copperWorkZ": 13.4,
     "insulatorWorkZ": 0.4,
     "crossoverWorkZ": 0.6,
-    "pasteWorkZ": 46.7,
+    "pasteWorkZ": 46.5,
     "cameraWorkZ": 50,
     "substrateHeight": 1.4,
     "hopClearance": 5,
@@ -68,12 +68,9 @@
             "name": "Solder Paste",
             "type": "paste",
             "toolNumber": 1,
-            "nozzleSize": 0.25,
-            "cureTemp": 0.0,
-            "cureSeconds": 0.0,
-            "traceWidth": 0.25,
-            "cureDryTemp": 90.0,
-            "cureDrySeconds": 300.0
+            "nozzleSize": 0.3,
+            "cureTemp": 0,
+            "cureSeconds": 0
         },
         {
             "id": "camera",
@@ -87,5 +84,7 @@
             "type": "nc/pen",
             "toolNumber": 3
         }
-    ]
+    ],
+    "secondInkLayer": false,
+    "secondInkLayerZOffset": 0
 }
