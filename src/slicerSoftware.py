@@ -894,7 +894,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     current_e           = 0.0
 
     # Z heights for each layer — configurable, with sensible defaults
-    substrate_height = configFile.get("substrateHeight", 0)
+    substrate_height = configFile.get("substrateHeight", 1.5)
     copper_work_z    = configFile.get("copperWorkZ") + substrate_height
     insulator_work_z = configFile.get("insulatorWorkZ") + substrate_height
     crossover_work_z = configFile.get("crossoverWorkZ") + substrate_height
