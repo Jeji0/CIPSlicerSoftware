@@ -37,6 +37,9 @@ INK_FINAL_PULL_FEED = 200     # feed rate for that pull (mm/min)
 PARK_X, PARK_Y, PARK_Z = 0, -20, 150   # where the head parks during cure/heating
 COOLDOWN_WAIT_S = 1800        # post-cure cool-down dwell (30 min)
 
+# ── paste dot dispensing ──
+PASTE_WIGGLE = 0.2            # mm lateral wiggle after each dot to shear the paste off the tip
+
 # ── extrusion-mode retract ──
 RETRACT_FEED = 1800           # feed rate for the retraction move after each path
 
@@ -703,7 +706,7 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C', inset=None, fill_c
 
 # ─────────────────────────────────────────────────────────────────────────
 # Camera sweep — serpentine capture grid with a backlash jiggle at each row
-# start; M118/M240 markers are consumed by the vision pipeline.
+# start; M118/M240 markers are consumed by the vision pipeline (Andrew).
 # ─────────────────────────────────────────────────────────────────────────
 def camera_sweep(g, safe_z:float=CAMERA_SAFE_Z_DEFAULT, board_size_x: float = 0, board_size_y: float = 0,
                  layer_index: int = 0, camera_head_tool: int = 3,
@@ -712,8 +715,8 @@ def camera_sweep(g, safe_z:float=CAMERA_SAFE_Z_DEFAULT, board_size_x: float = 0,
     """Camera sweep after each ink + cure sequence."""
     print(f"  camera sweep layer {layer_index} — board {board_size_x:.1f}x{board_size_y:.1f}mm")
 
-    g.write(f"T{camera_head_tool} ; camera head")
     g.write("G28 ; home all axes")
+    g.write(f"T{camera_head_tool} ; camera head")
     g.write(f"M118 START_LAYER {layer_index}")
 
     num_rows    = max(1, math.ceil(board_size_y / row_spacing)) + 1
@@ -854,7 +857,7 @@ def prime_lead_screw(g, lift_z=PRIME_LIFT_Z, work_z=0.2, extrude_amount=PRIME_EX
     """
     print("Priming lead screw...")
     g.write(f"G0 Z{lift_z} F{PRIME_TRAVEL_FEED} ; lift Z for lead screw engagement")
-    g.write("G0 X0 Y200")
+    g.write("G0 X1 Y1")
     g.write(f"G1 E{extrude_amount} F{extrude_feed} ; initial piston seat")
 
     for i in range(prime_cycles):
@@ -894,7 +897,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     current_e           = 0.0
 
     # Z heights for each layer — configurable, with sensible defaults
-    substrate_height = configFile.get("substrateHeight", 1.5)
+    substrate_height = configFile.get("substrateHeight", 0)
     copper_work_z    = configFile.get("copperWorkZ") + substrate_height
     insulator_work_z = configFile.get("insulatorWorkZ") + substrate_height
     crossover_work_z = configFile.get("crossoverWorkZ") + substrate_height
@@ -1157,7 +1160,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     cure_dry_seconds = conductive_head.get("cureDrySeconds", 300)
                     cure_temp        = conductive_head.get("cureTemp", 170)
                     cure_seconds     = conductive_head.get("cureSeconds", 900)
-                    g.write("M84 ; disable motors")
                     g.write(f"M190 S{cure_dry_temp}")
                     g.write("G4 S300 ; stage 1: dry")
                     g.write(f"M190 S{cure_temp}")
@@ -1198,7 +1200,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 pads, _, _   = extract_coords(gbr_path, offset_x=global_offset_x, offset_y=global_offset_y)
                 if enable_tool_change:
                     g.write(f"T{paste_head.get('toolNumber', 1)} ; paste head")
-                    g.write("G28 ; home all axes")
                 print(f"  extracted {len(pads)} paste pads")
 
                 # ── PRIME LEAD SCREW ──────────────────────────────────
@@ -1214,6 +1215,9 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     g.rapid(z=paste_work_z)
                     g.write(f"G1 E{paste_dot_e} F{paste_pullpush_speed} ; dispense paste dot")
                     g.write(f"G1 E-{paste_dot_e} F{paste_pullpush_speed} ; retract")
+                    # small lateral wiggle to shear the paste string off the tip
+                    g.rapid(point=(px + PASTE_WIGGLE, py))
+                    g.rapid(point=(px, py))
                 g.rapid(z=paste_hop_z)
 
             elif layer_type == "insulator":
@@ -1402,7 +1406,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                     last_x, last_y = ex, ey
                 g.rapid(x=PARK_X, y=PARK_Y, z=PARK_Z)  # park away from board for cure
                 if enable_heating:
-                    g.write("M84 ; disable motors")
                     g.write(f"M190 S{conductive_head.get('cureDryTemp', 90)}")
                     g.sleep(conductive_head.get("cureDrySeconds", 300))
                     g.write(f"M190 S{conductive_head.get('cureTemp', 170)}")

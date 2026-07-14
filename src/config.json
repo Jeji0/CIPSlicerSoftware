@@ -9,7 +9,7 @@
     "crossoverWorkZ": 0.6,
     "pasteWorkZ": 46.7,
     "cameraWorkZ": 50,
-    "substrateHeight": 1.1,
+    "substrateHeight": 1.4,
     "hopClearance": 5,
     "layerMode": "single",
     "printSpeed": 60.0,
