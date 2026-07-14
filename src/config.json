@@ -23,7 +23,7 @@
     "pullpush_speed": 200,
     "paste_pullpush": 60.0,
     "paste_pullpush_speed": 200,
-    "pasteDotE": 20,
+    "pasteDotE": 40,
     "retractionDistance": 0.5,
     "traceEdgeInset": 0.05,
     "activeHeads": [

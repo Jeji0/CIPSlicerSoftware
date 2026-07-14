@@ -703,7 +703,7 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C', inset=None, fill_c
 
 # ─────────────────────────────────────────────────────────────────────────
 # Camera sweep — serpentine capture grid with a backlash jiggle at each row
-# start; M118/M240 markers are consumed by the vision pipeline (Andrew).
+# start; M118/M240 markers are consumed by the vision pipeline.
 # ─────────────────────────────────────────────────────────────────────────
 def camera_sweep(g, safe_z:float=CAMERA_SAFE_Z_DEFAULT, board_size_x: float = 0, board_size_y: float = 0,
                  layer_index: int = 0, camera_head_tool: int = 3,
@@ -1157,6 +1157,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     cure_dry_seconds = conductive_head.get("cureDrySeconds", 300)
                     cure_temp        = conductive_head.get("cureTemp", 170)
                     cure_seconds     = conductive_head.get("cureSeconds", 900)
+                    g.write("M84 ; disable motors")
                     g.write(f"M190 S{cure_dry_temp}")
                     g.write("G4 S300 ; stage 1: dry")
                     g.write(f"M190 S{cure_temp}")
@@ -1401,6 +1402,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                     last_x, last_y = ex, ey
                 g.rapid(x=PARK_X, y=PARK_Y, z=PARK_Z)  # park away from board for cure
                 if enable_heating:
+                    g.write("M84 ; disable motors")
                     g.write(f"M190 S{conductive_head.get('cureDryTemp', 90)}")
                     g.sleep(conductive_head.get("cureDrySeconds", 300))
                     g.write(f"M190 S{conductive_head.get('cureTemp', 170)}")
