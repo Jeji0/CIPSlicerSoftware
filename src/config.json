@@ -19,7 +19,7 @@
     "steps_per_mm_x": 80,
     "steps_per_mm_y": 80,
     "steps_per_mm_z": 400,
-    "pullpush": 30.0,
+    "pullpush": 5.0,
     "pullpush_speed": 200,
     "paste_pullpush": 60.0,
     "paste_pullpush_speed": 200,
@@ -86,5 +86,19 @@
         }
     ],
     "secondInkLayer": false,
-    "secondInkLayerZOffset": 0
+    "secondInkLayerZOffset": 0.1,
+    "toggles": {
+        "toggle_tool_change": true,
+        "toggle_heating": false,
+        "toggle_camera_sweep": false,
+        "toggle_crossover": false,
+        "toggle_arc_moves": true,
+        "toggle_extrusion": false,
+        "toggle_purge": false,
+        "toggle_conductive": true,
+        "toggle_paste": true,
+        "toggle_ink_traces_only": false,
+        "toggle_gerber_transfer": false,
+        "toggle_second_ink": true
+    }
 }
