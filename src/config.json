@@ -4,12 +4,12 @@
         220.0,
         250.0
     ],
-    "copperWorkZ": 13.4,
+    "copperWorkZ": 0.2,
     "insulatorWorkZ": 0.4,
     "crossoverWorkZ": 0.6,
     "pasteWorkZ": 46.5,
     "cameraWorkZ": 50,
-    "substrateHeight": 1.4,
+    "substrateHeight": 0.9,
     "hopClearance": 5,
     "layerMode": "single",
     "printSpeed": 60.0,
@@ -96,9 +96,10 @@
         "toggle_extrusion": false,
         "toggle_purge": false,
         "toggle_conductive": true,
-        "toggle_paste": true,
+        "toggle_paste": false,
         "toggle_ink_traces_only": false,
         "toggle_gerber_transfer": false,
-        "toggle_second_ink": true
-    }
+        "toggle_second_ink": false
+    },
+    "pasteRetractE": 20
 }

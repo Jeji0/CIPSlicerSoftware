@@ -51,6 +51,8 @@ PRIME_CYCLES      = 20        # number of mini-extrude cycles
 PRIME_CYCLE_DELAY = 2.5       # seconds between cycles
 PRIME_SETTLE_S    = 10        # settle wait after priming
 PRIME_TRAVEL_FEED = 20000     # rapid feed for the initial prime lift
+WIPE_X, WIPE_Y = 0, 200       # wipe station location on the bed
+WIPE_LENGTH  = 10             # mm of the single nozzle-wipe stroke after the purge
 
 # ── camera sweep ──
 CAMERA_SAFE_Z_DEFAULT = 50.0  # fallback camera height if not passed in
@@ -663,9 +665,9 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C', inset=None, fill_c
     else:
         return []
 
-    step   = nozzle_size * 1.5
+    step   = nozzle_size * 0.7
     if inset is None:
-        inset = nozzle_size / 2 + nozzle_size * 1.5  # pull first pass in so bead edge meets true pad boundary
+        inset = nozzle_size / 2 + nozzle_size * 0.8  # pull first pass in so bead edge meets true pad boundary
     if inset_y is None:
         inset_y = inset
     half_w = max(width / 2 - inset, 0)
@@ -849,6 +851,15 @@ def points_to_gcode_path(g, path, current_e, flow_rate, layer_height, trace_widt
 # Prime / purge — seats the lead-screw piston against the ink and runs
 # repeated mini-extrudes so dispensing starts consistently. Tunables at top.
 # ─────────────────────────────────────────────────────────────────────────
+def nozzle_wipe(g, work_z, lift_z):
+    """Travel to the wipe station and drag the nozzle through it once (all rapids)."""
+    g.rapid(z=lift_z)
+    g.rapid(point=(WIPE_X, WIPE_Y))
+    g.rapid(z=work_z)
+    g.rapid(x=WIPE_X + WIPE_LENGTH)
+    g.rapid(z=lift_z)
+
+
 def prime_lead_screw(g, lift_z=PRIME_LIFT_Z, work_z=0.2, extrude_amount=PRIME_EXTRUDE, extrude_feed=PRIME_FEED,
                      prime_cycles=PRIME_CYCLES, cycle_delay_s=PRIME_CYCLE_DELAY, settle_s=PRIME_SETTLE_S):
     """
@@ -866,10 +877,8 @@ def prime_lead_screw(g, lift_z=PRIME_LIFT_Z, work_z=0.2, extrude_amount=PRIME_EX
 
     g.write(f"G4 S{settle_s} ; settle wait")
 
-    "Jerk the excess ink away"
-    g.rapid(z=work_z)
-    g.move(x=10)
-    g.rapid(z=lift_z)
+    # nozzle wipe at the wipe station
+    nozzle_wipe(g, work_z=work_z, lift_z=lift_z)
     print("Lead screw primed")
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -890,7 +899,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
     validate_config(configFile)
 
     retraction_distance = configFile.get("retractionDistance", 0.5)
-    global_pullpush       = configFile.get("pullpush", 30)
+    global_pullpush       = configFile.get("pullpush", 10)
     global_pullpush_speed = configFile.get("pullpush_speed", 200)
     paste_pullpush          = configFile.get("paste_pullpush", 60)
     paste_pullpush_speed    = configFile.get("paste_pullpush_speed", 200)
@@ -1069,6 +1078,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
         g.write(f"F{print_feed_rate} ; set print feed rate")
         if enable_tool_change:
             g.write("T0 ; conductive head")
+            # wipe the freshly loaded nozzle before any printing
+            nozzle_wipe(g, work_z=copper_work_z, lift_z=copper_hop_z)
 
         layer_mode = configFile.get("layerMode", "single")
 
@@ -1234,7 +1245,8 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 if enable_purge:
                     prime_lead_screw(g, work_z=paste_work_z, extrude_amount=40, prime_cycles=10, lift_z=paste_work_z + 5.5)
 
-                paste_dot_e = configFile.get("pasteDotE", 20)
+                paste_dot_e     = configFile.get("pasteDotE", 20)
+                paste_retract_e = configFile.get("pasteRetractE", 20)
                 for px, py, size, shape in pads:
                     # dot dispense: plunge to the pad center, push a fixed
                     # extrusion amount, retract — no motion fill
@@ -1242,7 +1254,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     g.rapid(point=(px, py))
                     g.rapid(z=paste_work_z)
                     g.write(f"G1 E{paste_dot_e} F{paste_pullpush_speed} ; dispense paste dot")
-                    g.write(f"G1 E-{paste_dot_e} F{paste_pullpush_speed} ; retract")
+                    g.write(f"G1 E-{paste_retract_e} F{paste_pullpush_speed} ; retract")
                     # small lateral wiggle to shear the paste string off the tip
                     g.rapid(point=(px + PASTE_WIGGLE, py))
                     g.rapid(point=(px, py))

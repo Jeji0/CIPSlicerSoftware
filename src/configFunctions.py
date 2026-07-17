@@ -23,12 +23,19 @@ defLayHei = unitConv(0.2, defUnits)
 defPriSpe = unitConv(60, defUnits)
 
 printProp = {
-    "maxBedSize": [220.0, 220.0, 250.0],
-    "copperWorkZ": 14.8,
+    
+    "maxBedSize": [
+        220.0,
+        220.0,
+        250.0
+    ],
+    "copperWorkZ": 0.2,
     "insulatorWorkZ": 0.4,
     "crossoverWorkZ": 0.6,
     "pasteWorkZ": 46.5,
-    "cameraWorkZ": 54,
+    "cameraWorkZ": 50,
+    "substrateHeight": 0.9,
+    "hopClearance": 5,
     "layerMode": "single",
     "printSpeed": 60.0,
     "printFeedRate": 3600.0,
@@ -37,23 +44,31 @@ printProp = {
     "steps_per_mm_x": 80,
     "steps_per_mm_y": 80,
     "steps_per_mm_z": 400,
-    "pullpush": 2.0,
-    "pullpush_speed": 500,
-    "paste_pullpush": 1.0,
-    "paste_pullpush_speed": 300,
-    "activeHeads": ["conductor3", "si3104", "paste", "camera"],
+    "pullpush": 5.0,
+    "pullpush_speed": 200,
+    "paste_pullpush": 60.0,
+    "paste_pullpush_speed": 200,
+    "pasteDotE": 40,
+    "retractionDistance": 0.5,
+    "traceEdgeInset": 0.05,
+    "activeHeads": [
+        "conductor3",
+        "si3104",
+        "paste",
+        "camera"
+    ],
     "heads": [
         {
             "id": "conductor3",
             "name": "Voltera Conductor 3",
             "type": "conductive",
             "toolNumber": 0,
-            "nozzleSize": 0.2032,
-            "traceWidth": 0.2032,
-            "cureDryTemp": 90,
-            "cureDrySeconds": 300,
-            "cureTemp": 170,
-            "cureSeconds": 900,
+            "nozzleSize": 0.2,
+            "traceWidth": 0.2,
+            "cureDryTemp": 90.0,
+            "cureDrySeconds": 300.0,
+            "cureTemp": 170.0,
+            "cureSeconds": 900.0,
             "flowRate": 0.05,
             "layerHeight": 0.2,
             "flowScaleByWidth": True
@@ -95,12 +110,25 @@ printProp = {
             "toolNumber": 3
         }
     ],
-    "retractionDistance": 0.5,
-    "traceEdgeInset": 0.05,
-    "substrateHeight": 0,
-    "hopClearance": 5,
-    "pasteDotE": 20
+    "secondInkLayer": False,
+    "secondInkLayerZOffset": 0.1,
+    "toggles": {
+        "toggle_tool_change": True,
+        "toggle_heating": False,
+        "toggle_camera_sweep": False,
+        "toggle_crossover": False,
+        "toggle_arc_moves": True,
+        "toggle_extrusion": False,
+        "toggle_purge": False,
+        "toggle_conductive": True,
+        "toggle_paste": True,
+        "toggle_ink_traces_only": False,
+        "toggle_gerber_transfer": False,
+        "toggle_second_ink": True
+    },
+    "pasteRetractE": 20
 }
+
 filePath = {
     "gerberFile": "TestFiles/test-gbr.zip"
 }
