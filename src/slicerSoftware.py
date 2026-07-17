@@ -51,7 +51,7 @@ PRIME_CYCLES      = 20        # number of mini-extrude cycles
 PRIME_CYCLE_DELAY = 2.5       # seconds between cycles
 PRIME_SETTLE_S    = 10        # settle wait after priming
 PRIME_TRAVEL_FEED = 20000     # rapid feed for the initial prime lift
-WIPE_X, WIPE_Y = 0, 200       # wipe station location on the bed
+WIPE_X, WIPE_Y = 5, 190       # wipe station location on the bed
 WIPE_LENGTH  = 10             # mm of the single nozzle-wipe stroke after the purge
 
 # ── camera sweep ──
