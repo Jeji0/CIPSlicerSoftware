@@ -35,7 +35,7 @@ BOARD_MARGIN = 2.0            # mm gap between machine origin and board min corn
 INK_FINAL_PULL_E    = 400     # big E pull to fully stop ink flow after a layer
 INK_FINAL_PULL_FEED = 200     # feed rate for that pull (mm/min)
 PARK_X, PARK_Y, PARK_Z = 0, -20, 150   # where the head parks during cure/heating
-COOLDOWN_WAIT_S = 1800        # post-cure cool-down dwell (30 min)
+COOLDOWN_WAIT_S = 1200        # post-cure cool-down dwell (20 min)
 
 # ── paste dot dispensing ──
 PASTE_WIGGLE = 0.2            # mm lateral wiggle after each dot to shear the paste off the tip
@@ -710,6 +710,19 @@ def generate_pad_raster(cx, cy, size, nozzle_size, shape='C', inset=None, fill_c
 # Camera sweep — serpentine capture grid with a backlash jiggle at each row
 # start; M118/M240 markers are consumed by the vision pipeline (Andrew).
 # ─────────────────────────────────────────────────────────────────────────
+def emit_gerber_transfer(g, files_to_process):
+    """Stream the top copper gerber to the vision system over M118."""
+    g.write("; --- GERBER FILE TRANSFER ---")
+    for gbr_path, layer_type, is_bottom in files_to_process:
+        if layer_type == "copper" and not is_bottom:
+            g.write("M118 BEGIN_FILE_TRANSFER")
+            with open(gbr_path, "r") as top_copper_gbr_file:
+                for line in top_copper_gbr_file:
+                    g.write("M118 " + line)
+            g.write("M118 END_FILE_TRANSFER")
+            break
+
+
 def camera_sweep(g, safe_z:float=CAMERA_SAFE_Z_DEFAULT, board_size_x: float = 0, board_size_y: float = 0,
                  layer_index: int = 0, camera_head_tool: int = 3,
                  row_spacing: float = CAMERA_GRID_SPACING, column_spacing: float = CAMERA_GRID_SPACING,
@@ -717,7 +730,6 @@ def camera_sweep(g, safe_z:float=CAMERA_SAFE_Z_DEFAULT, board_size_x: float = 0,
     """Camera sweep after each ink + cure sequence."""
     print(f"  camera sweep layer {layer_index} — board {board_size_x:.1f}x{board_size_y:.1f}mm")
 
-    g.write("G28 ; home all axes")
     g.write(f"T{camera_head_tool} ; camera head")
     g.write(f"M118 START_LAYER {layer_index}")
 
@@ -1056,19 +1068,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
     # --- G-Code Generation Phase ---
     with GCodeBuilder(output=output_file) as g:
-        if enable_gerber_transfer:
-            g.write("; --- GERBER FILE TRANSFER ---")
-            for gbr_path, layer_type, is_bottom in files_to_process:
-                if layer_type == "copper" and not is_bottom:
-                    g.write("M118 BEGIN_FILE_TRANSFER")
-                    with open(gbr_path, "r") as top_copper_gbr_file:
-                        for line in top_copper_gbr_file:
-                            # .strip() removes the trailing newline character (\n)
-                            g.write("M118 " + line)
-                    g.write("M118 END_FILE_TRANSFER")
-                    break
-
-
         g.write("; --- BEGIN PRINT ---")
         g.write("G21 ; set units to millimeters")
         g.write("G90 ; absolute coordinates")
@@ -1193,19 +1192,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 # and everything cures/sweeps once at the end
                 if copper_passes_done >= total_copper_passes:
                     g.write(f"G1 E-{INK_FINAL_PULL_E} F{INK_FINAL_PULL_FEED} ; large pull out to stop ink extrusion")
-                    g.rapid(x=PARK_X, y=PARK_Y, z=PARK_Z)  # park away from board for cure
-                    if enable_heating:
-                        cure_dry_temp    = conductive_head.get("cureDryTemp", 90)
-                        cure_dry_seconds = conductive_head.get("cureDrySeconds", 300)
-                        cure_temp        = conductive_head.get("cureTemp", 170)
-                        cure_seconds     = conductive_head.get("cureSeconds", 900)
-                        g.write(f"M190 S{cure_dry_temp}")
-                        g.write("G4 S300 ; stage 1: dry")
-                        g.write(f"M190 S{cure_temp}")
-                        g.write("G4 S900 ; stage 2: cure")
-                        g.write("M190 S0")
-                        g.write(f"G4 S{COOLDOWN_WAIT_S} ; cool-down wait")
-
                     if enable_camera_sweep:
                         if pads or raw_segments:
                             all_x = [p[0] for p in pads] + \
@@ -1223,6 +1209,9 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                             sweep_origin_y = global_offset_y
                             sweep_size_x   = board_size_x
                             sweep_size_y   = board_size_y
+                        # send the design to the vision system just before it inspects
+                        if enable_gerber_transfer:
+                            emit_gerber_transfer(g, files_to_process)
                         camera_sweep(g, safe_z=camera_work_z,
                                      board_size_x=sweep_size_x,
                                      board_size_y=sweep_size_y,
@@ -1230,6 +1219,20 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                                      camera_head_tool=camera_tool_number,
                                      origin_x=sweep_origin_x,
                                      origin_y=sweep_origin_y)
+
+                    g.rapid(x=PARK_X, y=PARK_Y, z=PARK_Z)  # park away from board for cure
+                    if enable_heating:
+                        cure_dry_temp    = conductive_head.get("cureDryTemp", 90)
+                        cure_dry_seconds = conductive_head.get("cureDrySeconds", 300)
+                        cure_temp        = conductive_head.get("cureTemp", 170)
+                        cure_seconds     = conductive_head.get("cureSeconds", 900)
+                        g.write(f"M190 S{cure_dry_temp}")
+                        g.write("G4 S300 ; stage 1: dry")
+                        g.write(f"M190 S{cure_temp}")
+                        g.write("G4 S900 ; stage 2: cure")
+                        g.write("M190 S0")
+                        g.write(f"G4 S{COOLDOWN_WAIT_S} ; cool-down wait")
+
 
             elif layer_type == "paste":
                 if not enable_paste:
@@ -1239,6 +1242,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                 pads, _, _   = extract_coords(gbr_path, offset_x=global_offset_x, offset_y=global_offset_y)
                 if enable_tool_change:
                     g.write(f"T{paste_head.get('toolNumber', 1)} ; paste head")
+                    nozzle_wipe(g, work_z=paste_work_z, lift_z=paste_hop_z)
                 print(f"  extracted {len(pads)} paste pads")
 
                 # ── PRIME LEAD SCREW ──────────────────────────────────
@@ -1246,7 +1250,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     prime_lead_screw(g, work_z=paste_work_z, extrude_amount=40, prime_cycles=10, lift_z=paste_work_z + 5.5)
 
                 paste_dot_e     = configFile.get("pasteDotE", 20)
-                paste_retract_e = configFile.get("pasteRetractE", 20)
+                paste_retract_e = configFile.get("pasteRetractE", 0)
                 for px, py, size, shape in pads:
                     # dot dispense: plunge to the pad center, push a fixed
                     # extrusion amount, retract — no motion fill
@@ -1254,6 +1258,7 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                     g.rapid(point=(px, py))
                     g.rapid(z=paste_work_z)
                     g.write(f"G1 E{paste_dot_e} F{paste_pullpush_speed} ; dispense paste dot")
+                    g.write("G4 S0.5 ; delay")
                     g.write(f"G1 E-{paste_retract_e} F{paste_pullpush_speed} ; retract")
                     # small lateral wiggle to shear the paste string off the tip
                     g.rapid(point=(px + PASTE_WIGGLE, py))
