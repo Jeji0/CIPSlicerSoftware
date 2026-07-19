@@ -752,6 +752,7 @@ def camera_sweep(g, safe_z:float=CAMERA_SAFE_Z_DEFAULT, board_size_x: float = 0,
         g.write(f"G0 X{origin_x:.3f} Y{y_pos:.3f} Z{safe_z:.3f}")
         g.write("M118 NEW_ROW")
 
+    g.write("G28 ; return home after sweep")
     g.write(f"M118 END_LAYER {layer_index}")
     return True
 
@@ -1210,7 +1211,6 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
                             sweep_size_y   = board_size_y
                         # send the design to the vision system just before it inspects
                         if enable_gerber_transfer:
-                            g.write("G0 Z20")
                             emit_gerber_transfer(g, files_to_process)
                         camera_sweep(g, safe_z=camera_work_z,
                                      board_size_x=sweep_size_x,
@@ -1251,7 +1251,13 @@ def run(enable_tool_change=True, enable_heating=True, enable_camera_sweep=True,
 
                 paste_dot_e     = configFile.get("pasteDotE", 20)
                 paste_retract_e = configFile.get("pasteRetractE", 0)
+                # XY offset between the paste nozzle and the ink nozzle, so
+                # dots land centered on the pads despite the head separation
+                paste_off_x = paste_head.get("offsetX", 0)
+                paste_off_y = paste_head.get("offsetY", 0)
                 for px, py, size, shape in pads:
+                    px += paste_off_x
+                    py += paste_off_y
                     # dot dispense: plunge to the pad center, push a fixed
                     # extrusion amount, retract — no motion fill
                     g.rapid(z=paste_hop_z)

@@ -95,7 +95,9 @@ printProp = {
             "toolNumber": 1,
             "nozzleSize": 0.3,
             "cureTemp": 0,
-            "cureSeconds": 0
+            "cureSeconds": 0,
+            "offsetX": 0.5,
+            "offsetY": 0.5
         },
         {
             "id": "camera",
