@@ -48,7 +48,7 @@ printProp = {
     "pullpush_speed": 200,
     "paste_pullpush": 60.0,
     "paste_pullpush_speed": 200,
-    "pasteDotE": 40,
+    "pasteDotE": 20,
     "retractionDistance": 0.5,
     "traceEdgeInset": 0.05,
     "activeHeads": [
