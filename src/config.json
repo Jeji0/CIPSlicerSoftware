@@ -7,8 +7,8 @@
     "copperWorkZ": 0.2,
     "insulatorWorkZ": 0.4,
     "crossoverWorkZ": 0.6,
-    "pasteWorkZ": 46.5,
-    "cameraWorkZ": 50,
+    "pasteWorkZ": 28.9,
+    "cameraWorkZ": 39,
     "substrateHeight": 0.9,
     "hopClearance": 5,
     "layerMode": "single",
@@ -42,7 +42,7 @@
             "traceWidth": 0.2,
             "cureDryTemp": 90.0,
             "cureDrySeconds": 300.0,
-            "cureTemp": 170.0,
+            "cureTemp": 180.0,
             "cureSeconds": 900.0,
             "flowRate": 0.05,
             "layerHeight": 0.2,
@@ -89,17 +89,17 @@
     "secondInkLayerZOffset": 0.1,
     "toggles": {
         "toggle_tool_change": true,
-        "toggle_heating": false,
+        "toggle_heating": true,
         "toggle_camera_sweep": false,
         "toggle_crossover": false,
         "toggle_arc_moves": true,
         "toggle_extrusion": false,
         "toggle_purge": false,
         "toggle_conductive": true,
-        "toggle_paste": false,
+        "toggle_paste": true,
         "toggle_ink_traces_only": false,
         "toggle_gerber_transfer": false,
-        "toggle_second_ink": false
+        "toggle_second_ink": true
     },
-    "pasteRetractE": 20
+    "pasteRetractE": 0
 }

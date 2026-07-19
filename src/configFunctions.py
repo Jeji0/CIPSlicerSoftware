@@ -32,8 +32,8 @@ printProp = {
     "copperWorkZ": 0.2,
     "insulatorWorkZ": 0.4,
     "crossoverWorkZ": 0.6,
-    "pasteWorkZ": 46.5,
-    "cameraWorkZ": 50,
+    "pasteWorkZ": 28.9,
+    "cameraWorkZ": 39,
     "substrateHeight": 0.9,
     "hopClearance": 5,
     "layerMode": "single",
@@ -67,7 +67,7 @@ printProp = {
             "traceWidth": 0.2,
             "cureDryTemp": 90.0,
             "cureDrySeconds": 300.0,
-            "cureTemp": 170.0,
+            "cureTemp": 180.0,
             "cureSeconds": 900.0,
             "flowRate": 0.05,
             "layerHeight": 0.2,
@@ -126,7 +126,7 @@ printProp = {
         "toggle_gerber_transfer": False,
         "toggle_second_ink": True
     },
-    "pasteRetractE": 20
+    "pasteRetractE": 0
 }
 
 filePath = {
